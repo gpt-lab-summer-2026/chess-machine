@@ -139,6 +139,31 @@ The one thing to bench-test early with your real magnets + EM: pull force vs air
 gap at the pick height, and whether "off" alone releases or you need the reverse
 pulse.
 
+### 4.3 Motor / actuator choice for X and Z
+
+The X/Z axes only **position a light head** (pulley + electromagnet + at most one
+carried piece — a few grams). They never push pieces or bear a holding load. So
+optimize for **speed, low cost, and low friction**, not force or holding torque.
+
+- ✅ **Recommended: belt-driven carriage on a linear rail** — a stepper turns a
+  GT2 pulley that drags a low-friction cart (MGN12 rail, or V-wheels on
+  aluminium extrusion). This is exactly the "cart on a rail that doesn't have to
+  push" idea. It's fast, cheap, and matches the firmware's `STEPS_PER_MM` model:
+  a 20-tooth GT2 pulley at 1/16 microstepping ≈ **80 steps/mm**, which is the
+  firmware default. Two such axes (simple Cartesian, or an H-bot/CoreXY if you
+  want both motors fixed to the frame) cover the 150 mm × 150 mm area.
+- ⚠️ **Lead-screw "linear actuators"** work but are the wrong tool: high push
+  force you don't need, slow, and self-locking — they hurt responsiveness.
+- ⚠️ **True magnetic linear motors** are precise and fast but expensive overkill
+  for a few-gram head.
+
+Stroke: **150 mm is fine** — just size the playable grid to ~120 mm (§4.1). The
+moving mass is tiny, so you can run fast feeds; keep acceleration moderate so the
+hanging electromagnet doesn't swing (firmware `ACCEL`, host `settle_ms` are
+tunable). Steppers are open-loop — fine at this scale; if a belt ever skips,
+re-home. The firmware/protocol are motor-agnostic (STEP/DIR + steps/mm), so belt
+vs screw vs linear motor is purely a `*_STEPS_PER_MM` change.
+
 ## 5. Open questions / risks
 
 - **Magnet release method** — confirm whether MOSFET ON/OFF suffices or you need
