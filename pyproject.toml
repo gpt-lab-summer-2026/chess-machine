@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chessmachine"
+version = "0.1.0"
+description = "Voice-controlled, self-actuating chess board (Raspberry Pi 5 + ESP32)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "samppa0000" }]
+dependencies = [
+    "chess>=1.11",   # python-chess: board state, move validation, SAN/UCI
+    "pyyaml>=6.0",   # config loading
+]
+
+[project.optional-dependencies]
+# Onboard voice stack (Raspberry Pi 5). Installed via requirements-pi.txt.
+voice = [
+    "faster-whisper>=1.0",  # distil-whisper STT via CTranslate2 (int8 on CPU)
+    "kokoro-onnx>=0.3",     # Kokoro TTS (ONNX runtime, CPU-friendly)
+    "sounddevice>=0.4",     # mic capture / speaker playback
+    "numpy>=1.24",
+    "webrtcvad>=2.0",       # voice-activity detection for end-of-utterance
+]
+# Motor control transport
+motion = ["pyserial>=3.5"]
+# In-process SLM (alternative to running llama-server separately)
+slm = ["llama-cpp-python>=0.2.70"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+chessmachine = "chessmachine.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"

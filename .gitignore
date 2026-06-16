@@ -1,0 +1,37 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Large model assets (download separately, see docs/SETUP_PI.md) ---
+models/
+*.gguf
+*.onnx
+*.pt
+*.bin
+
+# --- Runtime artifacts ---
+*.wav
+recordings/
+logs/
+*.log
+
+# --- Local-only config (copy from config/config.example.yaml) ---
+config/config.yaml
+config/local.yaml
+config/*.local.yaml
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.idea/
+*.code-workspace

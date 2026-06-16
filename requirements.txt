@@ -1,0 +1,4 @@
+# Core logic only (chess rules + config). Enough to run the full pipeline in
+# --dev mode (typed input, mock motor, random engine) on any machine.
+chess>=1.11
+pyyaml>=6.0

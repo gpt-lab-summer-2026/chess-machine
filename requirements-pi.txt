@@ -1,0 +1,18 @@
+# Full onboard stack for the Raspberry Pi 5 deployment.
+#   pip install -r requirements-pi.txt
+# Plus, NOT pip-installable (see docs/SETUP_PI.md):
+#   - stockfish  (apt install stockfish)
+#   - llama.cpp  (build llama-server, or use the `slm` extra for in-process)
+#   - Kokoro + distil-whisper model files (download script in docs)
+
+-r requirements.txt
+
+# Voice
+faster-whisper>=1.0
+kokoro-onnx>=0.3
+sounddevice>=0.4
+numpy>=1.24
+webrtcvad>=2.0
+
+# Motor transport
+pyserial>=3.5

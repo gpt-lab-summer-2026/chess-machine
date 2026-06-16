@@ -1,0 +1,84 @@
+# chessmachine configuration — copy to config/config.yaml and edit.
+# Every key is optional; anything omitted uses the built-in default
+# (see src/chessmachine/config.py). Unknown keys are rejected loudly.
+
+app:
+  play_as: black            # color the MACHINE plays: white | black
+  auto_reply: true          # after the opponent's move, immediately make ours
+  confirm_moves: true       # speak each move as it is executed
+  log_level: INFO
+
+audio:
+  input_device: null        # null = system default mic
+  output_device: null
+  sample_rate: 16000        # whisper wants 16 kHz mono
+  vad:
+    enabled: true
+    aggressiveness: 2       # 0..3
+    silence_ms: 800         # trailing silence that ends an utterance
+
+stt:
+  backend: distil_whisper   # distil_whisper | stdin (dev)
+  model: distil-whisper/distil-small.en   # or distil-medium.en for accuracy
+  device: cpu
+  compute_type: int8
+  language: en
+
+tts:
+  backend: kokoro           # kokoro | stdout (dev)
+  voice: af_heart
+  speed: 1.0
+  model_path: models/kokoro/kokoro-v1.0.onnx
+  voices_path: models/kokoro/voices-v1.0.bin
+
+slm:
+  backend: llama_cpp        # llama_cpp | rule_based (dev/fallback, no model)
+  mode: server              # server (run llama-server) | inproc (llama-cpp-python)
+  server_url: http://127.0.0.1:8080
+  model_path: models/slm/model.gguf   # used only in inproc mode
+  n_ctx: 4096
+  n_threads: 4
+  temperature: 0.2
+  max_tokens: 256
+
+engine:
+  backend: stockfish        # stockfish | random (dev/fallback)
+  stockfish_path: stockfish # path or command on PATH
+  threads: 2
+  hash_mb: 256
+  default_difficulty: medium
+  presets:                  # voice "set difficulty <name>" picks one of these
+    easy:   { elo: 800,  depth: 6,  movetime_ms: 300,  skill: 3 }
+    medium: { elo: 1500, depth: 12, movetime_ms: 800,  skill: 10 }
+    hard:   { elo: 2400, depth: 18, movetime_ms: 1500, skill: 20 }
+
+motion:
+  backend: serial           # serial | mock (dev)
+  serial:
+    port: /dev/ttyUSB0      # Windows: COM3
+    baud: 115200
+    timeout_s: 5.0
+  geometry:
+    # Origin = center of square a1, measured from the homed (0,0) corner.
+    origin_x_mm: 20.0
+    origin_z_mm: 20.0
+    square_pitch_mm: 18.75  # 150 mm / 8
+    file_axis: x            # files a..h run along this axis (x|z)
+    rank_axis: z            # ranks 1..8 run along this axis
+    invert_file: false
+    invert_rank: false
+    travel_height_mm: 60.0  # pulley raised: clears the tallest piece
+    pick_height_mm: 4.0     # pulley lowered: magnet touches a piece
+    # Captured-piece storage, off to the side of the board.
+    graveyard_x_mm: 175.0
+    graveyard_z_start_mm: 10.0
+    graveyard_z_pitch_mm: 11.0
+    graveyard_x_pitch_mm: 13.0
+    graveyard_slots_per_column: 8
+    graveyard_columns: 4
+  speeds:
+    travel_feed: 4000       # mm/min
+    lift_feed: 1500
+    settle_ms: 250          # damp cable swing after a move
+  magnet:
+    settle_ms: 300
