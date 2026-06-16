@@ -59,23 +59,25 @@ motion:
     baud: 115200
     timeout_s: 5.0
   geometry:
+    # 150 mm linear-motor stroke: a 120 mm playable 8x8 grid + a storage strip,
+    # all within reach. See docs/DESIGN.md for the geometry budget.
     # Origin = center of square a1, measured from the homed (0,0) corner.
-    origin_x_mm: 20.0
-    origin_z_mm: 20.0
-    square_pitch_mm: 18.75  # 150 mm / 8
+    origin_x_mm: 10.0
+    origin_z_mm: 10.0
+    square_pitch_mm: 15.0   # 120 mm playable grid / 8
     file_axis: x            # files a..h run along this axis (x|z)
     rank_axis: z            # ranks 1..8 run along this axis
     invert_file: false
     invert_rank: false
-    travel_height_mm: 60.0  # pulley raised: clears the tallest piece
+    travel_height_mm: 60.0  # pulley raised: clears pieces AND decouples magnetically
     pick_height_mm: 4.0     # pulley lowered: magnet touches a piece
-    # Captured-piece storage, off to the side of the board.
-    graveyard_x_mm: 175.0
+    # Captured-piece storage: a 2-column strip beside the grid, within 150 mm reach.
+    graveyard_x_mm: 127.5
     graveyard_z_start_mm: 10.0
-    graveyard_z_pitch_mm: 11.0
-    graveyard_x_pitch_mm: 13.0
+    graveyard_z_pitch_mm: 15.0
+    graveyard_x_pitch_mm: 15.0
     graveyard_slots_per_column: 8
-    graveyard_columns: 4
+    graveyard_columns: 2    # 2 x 8 = 16 slots ("2 per row")
   speeds:
     travel_feed: 4000       # mm/min
     lift_feed: 1500

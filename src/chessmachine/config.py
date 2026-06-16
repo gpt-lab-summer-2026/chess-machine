@@ -116,10 +116,12 @@ class SerialConfig:
 @dataclass
 class GeometryConfig:
     # Origin = (X,Z) of the center of square a1, measured from the homed corner.
-    origin_x_mm: float = 20.0
-    origin_z_mm: float = 20.0
-    square_pitch_mm: float = 18.75    # 150 mm board / 8 squares
-    board_size_mm: float = 150.0
+    # Defaults assume 150 mm linear-motor stroke: a 120 mm PLAYABLE 8x8 grid
+    # (15 mm squares) plus a ~30 mm storage strip, all within reach. See docs/DESIGN.md.
+    origin_x_mm: float = 10.0
+    origin_z_mm: float = 10.0
+    square_pitch_mm: float = 15.0     # 120 mm playable grid / 8 squares
+    board_size_mm: float = 120.0      # playable area; physical board incl. storage ~150
     # Which physical axis the files (a..h) and ranks (1..8) run along.
     file_axis: str = "x"              # "x" or "z"
     rank_axis: str = "z"              # the other one
@@ -128,13 +130,16 @@ class GeometryConfig:
     # Pulley (vertical) travel.
     travel_height_mm: float = 60.0    # cable retracted: clears the tallest piece
     pick_height_mm: float = 4.0       # cable lowered: magnet contacts a piece
-    # Off-board storage for captured pieces (a.k.a. graveyard).
-    graveyard_x_mm: float = 175.0
+    # Off-board storage for captured pieces (a.k.a. graveyard): a strip beside
+    # the grid, still inside the 150 mm reach. 2 columns x 8 rows = 16 slots
+    # ("2 per row"). A full board reset needs 32 slots, so with 16 the machine
+    # asks for a manual reset (see Choreographer.setup_starting_position).
+    graveyard_x_mm: float = 127.5
     graveyard_z_start_mm: float = 10.0
-    graveyard_z_pitch_mm: float = 11.0
-    graveyard_x_pitch_mm: float = 13.0
+    graveyard_z_pitch_mm: float = 15.0
+    graveyard_x_pitch_mm: float = 15.0
     graveyard_slots_per_column: int = 8
-    graveyard_columns: int = 4
+    graveyard_columns: int = 2
 
 
 @dataclass
