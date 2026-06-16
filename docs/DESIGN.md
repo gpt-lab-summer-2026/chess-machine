@@ -157,6 +157,30 @@ optimize for **speed, low cost, and low friction**, not force or holding torque.
 - ⚠️ **True magnetic linear motors** are precise and fast but expensive overkill
   for a few-gram head.
 
+**Guide vs drive — keep the MGN12.** The MGN12 rail + carriage is the *guide*
+(it bears the load and keeps motion straight and low-friction); it is *not* the
+*drive*. Pair it with a belt drive — they're complementary, not alternatives.
+
+**Per-axis stack (belt on MGN12):** MGN12 rail + MGN12C block (light load → the C
+block is plenty); a NEMA17 at one end with a 20T GT2 pulley; a flanged idler at
+the far end; a 6 mm GT2 belt with both ends clamped to the carriage, looped
+motor↔idler (printer-style); a slotted/spring idler mount for tension; a
+microswitch endstop at the home end. Resolution: 20T GT2 = 40 mm/rev; NEMA17
+(200 steps) at 1/16 µstep = **80 steps/mm → 0.0125 mm/step**, ~1000× finer than a
+15 mm cell needs. Belt compliance is irrelevant for parking a magnet over a
+square, and homing resets any drift.
+
+**Why belt over the alternatives at 15–40 cm travel:** lead screws get slow and
+whip (critical speed) past ~30 cm and add holding force you don't want;
+rack-and-pinion adds backlash and cost; belt is light, fast, cheap, and scales.
+
+**Two-axis topology:**
+- *Stacked Cartesian* (recommended): the Z rail rides on the X carriage, the head
+  rides on Z. Dead simple, and the firmware drives X/Z as independent steppers —
+  **no software change**.
+- *CoreXY / H-bot*: both motors fixed to the frame (less moving mass, faster) but
+  needs belt-mixing kinematics added to the firmware (X=(A+B)/2, Z=(A−B)/2).
+
 Stroke: **150 mm is fine** — just size the playable grid to ~120 mm (§4.1). The
 moving mass is tiny, so you can run fast feeds; keep acceleration moderate so the
 hanging electromagnet doesn't swing (firmware `ACCEL`, host `settle_ms` are
