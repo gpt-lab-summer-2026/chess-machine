@@ -76,3 +76,46 @@ def build_analysis_messages(question: str, facts: dict) -> list[dict]:
         {"role": "system", "content": PHRASE_SYSTEM.format(facts=facts_to_text(facts))},
         {"role": "user", "content": question or "How does the position look?"},
     ]
+
+
+# Proactive reaction to a move just played (blunder/best/brilliant + tactics).
+COMMENT_SYSTEM = """You are a chess coach reacting OUT LOUD to a move, for a {tier} player. \
+Speak {length}, natural and suitable for text-to-speech. Use ONLY the facts below — never \
+invent a tactic, evaluation, or piece location, and don't restate the move's notation.
+{teach}
+Facts:
+- move played: {san} by {mover}
+- assessment: {label}
+- tactics found: {motifs}"""
+
+_LABEL_WORD = {
+    "blunder": "a blunder (loses material or the advantage)",
+    "mistake": "a mistake (clearly inferior)",
+    "best": "the engine's top choice",
+    "great": "the only move that holds the position",
+    "brilliant": "a brilliant, sound sacrifice",
+    "normal": "a reasonable move",
+    "forced": "forced",
+}
+_TIER_LENGTH = {"easy": "one or two short sentences", "medium": "one short sentence",
+                "hard": "one terse sentence, expert tone"}
+_TIER_TEACH = {"easy": "If you name a tactic (fork, pin, outpost), briefly explain what it means.",
+               "medium": "", "hard": ""}
+
+
+def build_move_comment_messages(info: dict) -> list[dict]:
+    tier = info.get("tier", "medium")
+    motifs = info.get("motifs") or []
+    system = COMMENT_SYSTEM.format(
+        tier=tier,
+        length=_TIER_LENGTH.get(tier, _TIER_LENGTH["medium"]),
+        teach=_TIER_TEACH.get(tier, ""),
+        san=info.get("san", "the move"),
+        mover=info.get("mover", "a player"),
+        label=_LABEL_WORD.get(info.get("label", "normal"), "a move"),
+        motifs="; ".join(motifs) if motifs else "none",
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "Give your spoken reaction now."},
+    ]

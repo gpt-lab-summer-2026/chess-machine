@@ -16,7 +16,7 @@ from typing import Optional
 from ..config import SlmConfig
 from .base import NLU
 from .intents import intent_from_json, Intent
-from .prompts import build_intent_messages, build_analysis_messages
+from .prompts import build_intent_messages, build_analysis_messages, build_move_comment_messages
 
 log = logging.getLogger(__name__)
 
@@ -127,3 +127,13 @@ class SlmNLU(NLU):
             return self.client.chat(messages, temperature=0.5, max_tokens=60).strip()
         except Exception:  # noqa: BLE001
             return self.fallback.small_talk(transcript, context)
+
+    def comment_on_move(self, info: dict) -> str:
+        try:
+            text = self.client.chat(
+                build_move_comment_messages(info), temperature=0.4, max_tokens=80,
+            ).strip().strip('"').strip()      # small models like to wrap replies in quotes
+            return text or self.fallback.comment_on_move(info)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("SLM move comment failed (%s); using deterministic", exc)
+            return self.fallback.comment_on_move(info)

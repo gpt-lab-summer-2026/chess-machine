@@ -193,9 +193,44 @@ class ChessMachine:
         text = f"{prefix} {speak_san(san)}."
         if report.notes:
             text += " " + " ".join(report.notes)
+        comment = self._move_comment(board_before, move, san)
+        if comment:
+            text += " " + comment
         if self.game.is_game_over():
             text += " " + self.game.result_text()
         return text
+
+    def _move_comment(self, board_before: chess.Board, move: chess.Move, san: str) -> str:
+        """Coach-style reaction to a noteworthy move (quality + grounded tactics).
+
+        Scaled by difficulty; silent for normal/book/forced moves. Requires an
+        evaluating engine (Stockfish) — a no-op for the dev RandomEngine.
+        """
+        if not getattr(self.engine, "provides_evaluation", False):
+            return ""
+        try:
+            quality = analysis.classify_move_quality(self.engine, board_before, move)
+            board_after = board_before.copy()
+            board_after.push(move)
+            mover = board_before.turn
+            motifs = analysis.find_tactics(board_after, mover)
+            if not analysis.should_comment(quality, motifs, self.difficulty):
+                return ""
+            info = {
+                "label": quality.label,
+                "cp_loss": quality.cp_loss,
+                "is_sacrifice": quality.is_sacrifice,
+                "only_good_move": quality.only_good_move,
+                "motifs": motifs,
+                "difficulty": self.difficulty,
+                "tier": analysis.difficulty_tier(self.difficulty),
+                "san": san,
+                "mover": GameState.color_name(mover),
+            }
+            return self.nlu.comment_on_move(info)
+        except Exception:  # noqa: BLE001 - commentary must never break a move
+            log.exception("Move commentary failed")
+            return ""
 
     def _resolve_difficulty(self, name: str) -> Optional[tuple[str, DifficultyPreset]]:
         name = (name or "").strip().lower()

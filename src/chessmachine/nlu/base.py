@@ -19,5 +19,24 @@ class NLU(ABC):
         return ("I can set the difficulty, analyze the board, make my move, "
                 "or play your move. What would you like?")
 
+    def comment_on_move(self, info: dict) -> str:
+        """One-line reaction to a move just played, grounded in `info`.
+
+        Default: deterministic phrasing (also the SLM's fallback). `info` carries
+        the move quality label, computed tactics, difficulty, SAN, and mover.
+        """
+        from ..chess_engine.analysis import MoveQuality, move_comment_summary
+
+        quality = MoveQuality(
+            label=info.get("label", "normal"),
+            cp_loss=info.get("cp_loss"),
+            is_sacrifice=info.get("is_sacrifice", False),
+            only_good_move=info.get("only_good_move", False),
+        )
+        return move_comment_summary(
+            quality, info.get("motifs", []), info.get("difficulty", ""),
+            info.get("mover", ""), info.get("san", ""),
+        )
+
     def close(self) -> None:  # pragma: no cover
         pass

@@ -19,7 +19,7 @@ audio:
 
 stt:
   backend: distil_whisper   # distil_whisper | stdin (dev)
-  model: distil-whisper/distil-small.en   # or distil-medium.en for accuracy
+  model: distil-small.en    # faster-whisper alias -> CTranslate2 (use distil-medium.en for accuracy)
   device: cpu
   compute_type: int8
   language: en

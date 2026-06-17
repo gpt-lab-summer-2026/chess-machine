@@ -42,6 +42,17 @@ class ChessEngine(ABC):
     @abstractmethod
     def analyse(self, board: chess.Board) -> AnalysisResult: ...
 
+    @property
+    def provides_evaluation(self) -> bool:
+        """True if `analyse`/`top_moves` give real evaluations (drives move
+        commentary). False for stand-ins like RandomEngine."""
+        return False
+
+    def top_moves(self, board: chess.Board, n: int = 2) -> list[AnalysisResult]:
+        """Best `n` moves with evaluations (multi-PV). Default: just the best."""
+        res = self.analyse(board)
+        return [res] if res.best_move else []
+
     def close(self) -> None:  # pragma: no cover - trivial
         pass
 
@@ -93,11 +104,29 @@ class StockfishEngine(ChessEngine):
         log.info("Difficulty set: elo=%s skill=%s depth=%s movetime=%sms",
                  preset.elo, preset.skill, preset.depth, preset.movetime_ms)
 
+    @property
+    def provides_evaluation(self) -> bool:
+        return True
+
     def best_move(self, board: chess.Board) -> Optional[chess.Move]:
         if board.is_game_over():
             return None
         result = self._engine.play(board, self._limit)
         return result.move
+
+    def top_moves(self, board: chess.Board, n: int = 2) -> list[AnalysisResult]:
+        import chess.engine
+
+        if board.is_game_over():
+            return []
+        # Analyse at honest strength (independent of play difficulty) so move
+        # quality is judged fairly. multipv lets us see how forced a move was.
+        infos = self._engine.analyse(
+            board, chess.engine.Limit(depth=16, time=1.0), multipv=max(1, n)
+        )
+        if isinstance(infos, dict):   # python-chess returns a bare dict for multipv=1
+            infos = [infos]
+        return [_analysis_from_info(i) for i in infos]
 
     def analyse(self, board: chess.Board) -> AnalysisResult:
         import chess.engine

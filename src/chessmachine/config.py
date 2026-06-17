@@ -40,7 +40,7 @@ class AudioConfig:
 @dataclass
 class SttConfig:
     backend: str = "distil_whisper"          # distil_whisper | stdin
-    model: str = "distil-whisper/distil-small.en"
+    model: str = "distil-small.en"          # faster-whisper alias -> CTranslate2 build
     device: str = "cpu"                      # cpu | cuda | auto
     compute_type: str = "int8"               # int8 is fast on the Pi 5 CPU
     language: str = "en"
