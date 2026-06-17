@@ -191,6 +191,11 @@ def create_engine(cfg: EngineConfig) -> ChessEngine:
         try:
             return StockfishEngine(cfg)
         except FileNotFoundError as exc:
+            if cfg.allow_random_fallback:
+                log.warning("Stockfish not found at '%s'; falling back to RandomEngine "
+                            "(dev mode — no real evaluation or move commentary).",
+                            cfg.stockfish_path)
+                return RandomEngine()
             raise RuntimeError(
                 f"Stockfish not found at '{cfg.stockfish_path}'. Install it "
                 "(e.g. `apt install stockfish`) or set engine.backend=random."

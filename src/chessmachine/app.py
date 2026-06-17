@@ -1,11 +1,17 @@
 """Command-line entrypoint.
 
-    chessmachine --config config/config.yaml      # full Pi deployment
-    chessmachine --dev                             # typed input, mock motor, random engine
-    chessmachine --dev --once "knight to f3"        # run one command and exit
+    chessmachine --config config/config.yaml             # full Pi deployment
+    chessmachine --dev                                    # typed I/O, mock motor, real brain
+    chessmachine --dev --config config/config.yaml        # + Stockfish path / SLM server URL
+    chessmachine --dev --once "knight to f3"               # run one command and exit
 
-`--dev` swaps every subsystem for its no-hardware/no-model variant, so the whole
-pipeline runs on any machine for development and testing.
+`--dev` swaps only the hardware-facing parts for stubs — typed input, printed
+output, mock motor — but KEEPS the real brain (llama SLM + Stockfish engine), so
+dev sessions exercise the actual NLU and move commentary. Both degrade
+gracefully: the SLM falls back to rule-based if no llama-server is running, and
+the engine falls back to a random mover if Stockfish isn't found — so `--dev`
+still runs on a bare machine. Pass `--config` so Stockfish/SLM are found, or
+`--engine random --slm rule_based` to force the old fully-offline behaviour.
 """
 from __future__ import annotations
 
@@ -22,7 +28,8 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="chessmachine", description=__doc__)
     p.add_argument("--config", help="path to a YAML config file")
     p.add_argument("--dev", action="store_true",
-                   help="dev mode: stdin STT, stdout TTS, rule-based NLU, random engine, mock motor")
+                   help="dev mode: typed I/O + mock motor, but keep the real SLM/engine "
+                        "(both fall back gracefully if the server/binary is missing)")
     p.add_argument("--text", action="store_true", help="typed input + printed output (keeps real engine/motor)")
     p.add_argument("--mock", action="store_true", help="use the mock motion backend (no hardware)")
     p.add_argument("--engine", choices=["stockfish", "random"], help="override engine backend")
@@ -37,11 +44,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
 
 def _apply_overrides(cfg: Config, args: argparse.Namespace) -> Config:
     if args.dev:
+        # Stub only the hardware-facing parts; keep the real brain (it degrades
+        # gracefully when the SLM server / Stockfish binary aren't available).
         cfg.stt.backend = "stdin"
         cfg.tts.backend = "stdout"
-        cfg.slm.backend = "rule_based"
-        cfg.engine.backend = "random"
         cfg.motion.backend = "mock"
+        cfg.engine.allow_random_fallback = True
     if args.text:
         cfg.stt.backend = "stdin"
         cfg.tts.backend = "stdout"

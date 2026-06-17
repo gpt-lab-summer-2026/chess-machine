@@ -92,6 +92,7 @@ class EngineConfig:
     threads: int = 2
     hash_mb: int = 256
     default_difficulty: str = "medium"
+    allow_random_fallback: bool = False      # dev: fall back to RandomEngine if no Stockfish
     presets: dict[str, DifficultyPreset] = field(
         default_factory=lambda: {
             "easy": DifficultyPreset(elo=800, depth=6, movetime_ms=600, skill=6),
