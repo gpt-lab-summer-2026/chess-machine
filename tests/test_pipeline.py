@@ -95,3 +95,16 @@ def test_undo_takes_back():
     assert len(m.game.history) == 1
     m.handle("undo")
     assert len(m.game.history) == 0
+
+
+def test_undo_takes_back_full_move_pair():
+    # With the machine auto-replying, "undo" should reverse BOTH its reply and
+    # the user's move, handing the move back to the user.
+    import chess
+    m, _ = make(auto_reply=True)
+    m.handle("e4")                       # user e4 + machine's auto-reply = 2 plies
+    assert len(m.game.history) == 2
+    m.handle("undo")
+    assert len(m.game.history) == 0
+    assert m.game.board == chess.Board()
+    assert m.game.turn() == chess.WHITE   # user (White) is back on move
