@@ -200,7 +200,7 @@ def speak_san(san: str) -> str:
     if core and core[0] in _PIECE_WORDS:
         piece = _PIECE_WORDS[core[0]]
         core = core[1:]
-
+    
     takes = "takes" in core or "x" in core
     dest = core.replace("x", "").strip()
     # Leftover leading file/rank is a disambiguator (e.g. "Rad1") — read it out.

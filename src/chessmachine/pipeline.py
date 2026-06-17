@@ -162,7 +162,7 @@ class ChessMachine:
         move_text = intent.move or intent.text or ""
         candidates = parse_move(move_text, board)
         if not candidates:
-            return self._say("move not readable. say it again please3")
+            return self._say("move not readable. say it again please")
         if len(candidates) > 1:
             return self._say(f"ambiguous move: did you mean "
                              f"{describe_candidates(candidates, board)}?")
@@ -186,38 +186,13 @@ class ChessMachine:
         return spoken
 
     def _do_undo(self) -> str:
-        if not self.game.board.move_stack:
+        move = self.game.undo()
+        if move is None:
             return self._say("There's no move to take back.")
-
-        user_color = not self.game.machine_color
-        undone: list[str] = []
-        notes: list[str] = []
-
-        def take_back_one() -> None:
-            san = self._last_san()                      # capture before popping
-            move = self.game.undo()
-            if move is None:
-                return
-            report = self.choreo.reverse_move(self.game.board, move)
-            if san:
-                undone.append(san)
-            notes.extend(report.notes)
-
-        # If the machine owns the most recent move (it's the user's turn now),
-        # reverse its reply first, then the user's own move — so the human is
-        # back on move and can replay. With no machine reply (e.g. auto-reply
-        # off), this just takes back the single move that was made.
-        if self.game.turn() == user_color:
-            take_back_one()
-        if self.game.board.move_stack:
-            take_back_one()
-
-        if undone:
-            text = "Taking back " + " and ".join(speak_san(s) for s in undone) + "."
-        else:
-            text = "Move taken back."
-        if notes:
-            text += " " + " ".join(notes)
+        report = self.choreo.reverse_move(self.game.board, move)
+        text = "Move taken back."
+        if report.notes:
+            text += " " + " ".join(report.notes)
         return self._say(text)
 
     # -- helpers ------------------------------------------------------------- #

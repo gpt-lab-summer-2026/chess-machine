@@ -84,7 +84,6 @@ def _castling_candidates(t: str, board: chess.Board) -> list[chess.Move]:
             out.append(mv)
     return out
 
-
 def parse_move(text: str, board: chess.Board) -> list[chess.Move]:
     """Return the legal moves matching `text`, most-confident first.
 
