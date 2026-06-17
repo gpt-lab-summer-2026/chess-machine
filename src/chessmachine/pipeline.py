@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from typing import Optional
 
 import chess
 
+from .clock import MatchClock
 from .config import Config, DifficultyPreset
 from .chess_engine import GameState, ChessEngine, analysis
 from .chess_engine.game import speak_san
@@ -47,6 +49,7 @@ class ChessMachine:
         self.game = GameState(machine_color=self.machine_color)
         self.difficulty = config.engine.default_difficulty
         self._last_spoken = ""
+        self.clock = MatchClock()
 
     # -- lifecycle ----------------------------------------------------------- #
     def start(self, home: bool = True) -> None:
@@ -61,7 +64,11 @@ class ChessMachine:
     def run(self) -> None:
         try:
             while True:
+                # The user's clock runs only while we wait for their input — all
+                # machine work (STT/SLM/actuation/speech) is off their clock.
+                self.clock.start_user()
                 transcript = self.stt.listen()
+                self.clock.stop_user()
                 if not transcript:
                     continue
                 if transcript.strip().lower() in QUIT_WORDS:
@@ -137,7 +144,10 @@ class ChessMachine:
     def _do_status(self) -> str:
         facts = analysis.describe_position(self.game.board, self.engine, self._last_san())
         turn = GameState.color_name(self.game.turn())
-        return self._say(f"{turn} to move. {facts['verdict'].capitalize()}.")
+        text = f"{turn} to move. {facts['verdict'].capitalize()}."
+        if self.cfg.app.match_clock and self.clock.user_seconds >= 1:
+            text += f" Your clock shows {self.clock.spoken()}."
+        return self._say(text)
 
     def _do_engine_move(self, prefix: str) -> str:
         if self.game.is_game_over():
@@ -145,7 +155,7 @@ class ChessMachine:
         move = self.engine.best_move(self.game.board)
         if move is None:
             return self._say("I have no legal move to make.")
-        return self._say(self._play_move(move, prefix))
+        return self._play_move(move, prefix)   # _play_move speaks internally
 
     def _do_opponent_move(self, intent: Intent) -> str:
         board = self.game.board
@@ -156,7 +166,7 @@ class ChessMachine:
         if len(candidates) > 1:
             return self._say(f"That move is ambiguous — did you mean "
                              f"{describe_candidates(candidates, board)}?")
-        spoken = self._say(self._play_move(candidates[0], "Okay,"))
+        spoken = self._play_move(candidates[0], "Okay,")   # _play_move speaks internally
         # Auto-reply with the engine's move if it's now our turn.
         if (self.cfg.app.auto_reply and not self.game.is_game_over()
                 and self.game.is_machine_turn()):
@@ -187,8 +197,20 @@ class ChessMachine:
 
     # -- helpers ------------------------------------------------------------- #
     def _play_move(self, move: chess.Move, prefix: str) -> str:
+        """Actuate, narrate, and speak a move. With concurrent actuation the
+        gantry carries the piece while we compute and speak the explanation —
+        the captured piece (if any) is always cleared first. Speaks internally."""
         board_before = self.game.board.copy()
-        report = self.choreo.execute_move(board_before, move)
+        # Promotions can prompt for a manual piece swap mid-actuation, so their
+        # notes aren't known until the gantry finishes — run those synchronously.
+        concurrent = self.cfg.app.concurrent_actuation and move.promotion is None
+        motion: Optional[threading.Thread] = None
+        if concurrent:
+            complete, report = self.choreo.begin_move(board_before, move)   # discard now (blocks)
+            motion = self._spawn_motion(complete)
+        else:
+            report = self.choreo.execute_move(board_before, move)
+
         san = self.game.push(move)
         text = f"{prefix} {speak_san(san)}."
         if report.notes:
@@ -198,7 +220,23 @@ class ChessMachine:
             text += " " + comment
         if self.game.is_game_over():
             text += " " + self.game.result_text()
+
+        self._say(text)                 # spoken while the gantry is still moving
+        if motion is not None:
+            motion.join()               # don't begin the next move until actuation is done
         return text
+
+    def _spawn_motion(self, complete) -> threading.Thread:
+        """Run the rest of a move's actuation on a worker thread."""
+        def run():
+            try:
+                complete()
+            except Exception:  # noqa: BLE001 - surface, but never crash the turn
+                log.exception("Actuation failed during concurrent move")
+
+        thread = threading.Thread(target=run, name="gantry", daemon=True)
+        thread.start()
+        return thread
 
     def _move_comment(self, board_before: chess.Board, move: chess.Move, san: str) -> str:
         """Coach-style reaction to a noteworthy move (quality + grounded tactics).

@@ -6,6 +6,9 @@ app:
   play_as: black            # color the MACHINE plays: white | black
   auto_reply: true          # after the opponent's move, immediately make ours
   confirm_moves: true       # speak each move as it is executed
+  concurrent_actuation: true # speak the move + explanation while the gantry moves
+                             # (a capture's discard always finishes first)
+  match_clock: true         # track the human's thinking time only (ask "status"/"score")
   log_level: INFO
 
 audio:

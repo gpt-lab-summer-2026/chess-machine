@@ -30,7 +30,7 @@ def test_partial_preset_override(tmp_path):
     p.write_text("engine:\n  presets:\n    easy:\n      elo: 600\n", encoding="utf-8")
     c = load_config(p)
     assert c.engine.presets["easy"].elo == 600
-    assert c.engine.presets["easy"].skill == 3       # other easy fields preserved
+    assert c.engine.presets["easy"].skill == 6       # other easy fields preserved (default)
     assert c.engine.presets["medium"].elo == 1500    # other presets preserved
 
 

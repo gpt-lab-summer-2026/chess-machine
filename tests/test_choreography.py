@@ -69,6 +69,30 @@ def test_promotion_without_spare_prompts_manual(rig):
     assert r.notes and "queen" in r.notes[0].lower()
 
 
+def test_begin_move_discards_capture_before_the_body(rig):
+    # The concurrency split: the captured piece is cleared synchronously, and
+    # only `complete()` performs the capturing piece's own travel.
+    ctl, gy, ch, geo = rig
+    b = chess.Board(); b.push_san("e4"); b.push_san("d5")
+    complete, report = ch.begin_move(b, chess.Move.from_uci("e4d5"))
+    assert gy.occupied() == 1                       # captured pawn already stored
+    assert ctl.moves() == [(55.0, 70.0), (127.5, 10.0)]  # lift d5 -> graveyard, and nothing else
+    complete()
+    assert ctl.moves()[2:] == [(70.0, 55.0), (55.0, 70.0)]  # only now does e4 travel to d5
+
+
+def test_begin_move_matches_execute_move(rig):
+    ctl, gy, ch, geo = rig
+    b = chess.Board("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1")
+    complete, _ = ch.begin_move(b, chess.Move.from_uci("e1g1"))
+    complete()
+    via_begin = ctl.moves()
+    ctl2, _, ch2, _ = _rig()
+    ch2.execute_move(chess.Board("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"),
+                     chess.Move.from_uci("e1g1"))
+    assert via_begin == ctl2.moves()                # identical actuation either path
+
+
 def test_reverse_capture_restores_piece(rig):
     ctl, gy, ch, geo = rig
     b = chess.Board(); b.push_san("e4"); b.push_san("d5")

@@ -96,24 +96,44 @@ class Choreographer:
 
     # -- public: execute one move ------------------------------------------- #
     def execute_move(self, board_before: chess.Board, move: chess.Move) -> ExecutionReport:
-        """Actuate `move`, given the position *before* it is applied."""
+        """Actuate `move`, given the position *before* it is applied (blocking)."""
+        complete, _report = self.begin_move(board_before, move)
+        return complete()
+
+    def begin_move(self, board_before: chess.Board, move: chess.Move):
+        """Split a move into (complete, report): the captured piece (if any) is
+        cleared to storage *now* (blocking), and `complete()` actuates the rest.
+
+        This lets the caller speak the move and its explanation while the gantry
+        carries the piece — but only after the capture's discard has finished,
+        so the board never looks wrong while we talk. `complete()` is safe to run
+        on a worker thread (it touches only the motion controller).
+        """
         cls = classify_move(board_before, move)
         report = ExecutionReport(kind=cls.kind)
 
-        if cls.is_castle:
-            self._transfer(self._sq(cls.from_square), self._sq(cls.to_square))   # king
-            self._transfer(self._sq(cls.rook_from), self._sq(cls.rook_to))       # rook
-            report.transfers = 2
-            report.description = f"castled {cls.castle_side}side"
-            return report
-
-        # 1) Clear a captured piece to storage (normal capture or en passant).
-        if cls.is_capture and cls.captured_piece is not None:
+        # Clear a captured piece to storage first (normal capture or en passant).
+        # Castling is never a capture, so this is skipped for it.
+        if not cls.is_castle and cls.is_capture and cls.captured_piece is not None:
             slot = self.graveyard.store(cls.captured_piece)
             self._transfer(self._sq(cls.captured_square), slot)
             report.transfers += 1
 
-        # 2) Move the piece (handling promotion).
+        def complete() -> ExecutionReport:
+            self._actuate_body(cls, report)
+            return report
+
+        return complete, report
+
+    def _actuate_body(self, cls: MoveClassification, report: ExecutionReport) -> None:
+        """The piece's own travel (after any capture has been discarded)."""
+        if cls.is_castle:
+            self._transfer(self._sq(cls.from_square), self._sq(cls.to_square))   # king
+            self._transfer(self._sq(cls.rook_from), self._sq(cls.rook_to))       # rook
+            report.transfers += 2
+            report.description = f"castled {cls.castle_side}side"
+            return
+
         if cls.promotion:
             self._do_promotion(cls, report)
             report.description = "promoted"
@@ -121,8 +141,6 @@ class Choreographer:
             self._transfer(self._sq(cls.from_square), self._sq(cls.to_square))
             report.transfers += 1
             report.description = "moved"
-
-        return report
 
     def _do_promotion(self, cls: MoveClassification, report: ExecutionReport) -> None:
         color = cls.moving_piece.color

@@ -94,9 +94,9 @@ class EngineConfig:
     default_difficulty: str = "medium"
     presets: dict[str, DifficultyPreset] = field(
         default_factory=lambda: {
-            "easy": DifficultyPreset(elo=800, depth=6, movetime_ms=300, skill=3),
-            "medium": DifficultyPreset(elo=1500, depth=12, movetime_ms=800, skill=10),
-            "hard": DifficultyPreset(elo=2400, depth=18, movetime_ms=1500, skill=20),
+            "easy": DifficultyPreset(elo=800, depth=6, movetime_ms=600, skill=6),
+            "medium": DifficultyPreset(elo=1500, depth=12, movetime_ms=1100, skill=10),
+            "hard": DifficultyPreset(elo=2400, depth=18, movetime_ms=1800, skill=20),
         }
     )
 
@@ -172,6 +172,8 @@ class AppConfig:
     auto_reply: bool = True           # auto-make the engine move after opponent's
     confirm_moves: bool = True        # speak each move as it is executed
     require_legal_confirmation: bool = True  # re-ask on illegal/ambiguous moves
+    concurrent_actuation: bool = True  # speak the move/explanation while the gantry moves
+    match_clock: bool = True          # track the human's thinking time (their clock only)
     log_level: str = "INFO"
 
 
