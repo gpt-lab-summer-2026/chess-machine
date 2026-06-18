@@ -97,3 +97,28 @@ def test_reset_with_default_16_slots_asks_for_manual():
     notes = ch.setup_starting_position(chess.Board())
     assert notes and "storage" in notes[0].lower()
     assert ctl.moves() == []                  # nothing moved; reported instead
+
+
+def test_failed_reset_clears_storage_model(rig):
+    # A manual reset means the human clears the board (incl. storage), so our
+    # captured-piece bookkeeping must be dropped to match.
+    ctl, gy, ch, geo = rig
+    gy.store(chess.Piece(chess.PAWN, chess.WHITE))
+    assert gy.occupied() == 1
+    ch.setup_starting_position(chess.Board())   # 16 slots < 32 pieces -> manual
+    assert gy.occupied() == 0
+
+
+def test_capture_with_full_storage_aborts_cleanly(rig):
+    # Once storage is full, a capture must abort without touching the board so
+    # the logical and physical positions can't drift apart.
+    ctl, gy, ch, geo = rig
+    for _ in range(gy.capacity):
+        gy.store(chess.Piece(chess.PAWN, chess.WHITE))
+    assert gy.free() == 0
+    b = chess.Board(); b.push_san("e4"); b.push_san("d5")
+    ctl.reset_log()
+    r = ch.execute_move(b, chess.Move.from_uci("e4d5"))
+    assert r.aborted and r.transfers == 0
+    assert ctl.moves() == []                  # nothing actuated
+    assert r.notes and "storage" in r.notes[0].lower()

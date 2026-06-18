@@ -51,9 +51,11 @@ point(file, rank) = origin + pitch * (file_or_rank index along each axis)
 Slots are generated column-major from `graveyard_x_mm` / `graveyard_z_start_mm`
 with `graveyard_*_pitch_mm`, `graveyard_slots_per_column`, and
 `graveyard_columns`. The default 2×8 = **16 slots** (at x = 127.5 / 142.5 mm)
-sits inside the **150 mm reach**. A full board reset needs 32 transient slots, so
-with 16 the machine asks for a manual reset; bump to 4 columns (32) only if you
-shrink the grid to keep everything ≤ 150 mm. See [DESIGN.md §4.1](DESIGN.md).
+sits inside the **150 mm reach**. Two cases exceed 16 and both degrade
+gracefully: once storage is full a further capture is refused (board untouched)
+until you clear it, and a full board reset (32 transient slots) falls back to a
+manual re-setup. Bump to 4 columns (32) only if you shrink the grid to keep
+everything ≤ 150 mm. See [DESIGN.md §4.1](DESIGN.md).
 
 ## Calibration workflow
 

@@ -222,7 +222,16 @@ def classify_move_quality(engine: ChessEngine, board_before: chess.Board,
     if after.is_checkmate():
         played_cp = _MATE_CP
     else:
-        played_cp = _to_cp_mover(engine.analyse(after), mover_white)
+        # The multi-PV search already scored its lines; if the played move is one
+        # of them, reuse that score rather than paying for a second search. The
+        # engine's own move is always the top line, so this skips the extra
+        # analysis on every machine move (and on any human move that was best).
+        played_cp = next(
+            (_to_cp_mover(r, mover_white) for r in tops if r.best_move == move),
+            None,
+        )
+        if played_cp is None:
+            played_cp = _to_cp_mover(engine.analyse(after), mover_white)
     if best_cp is None or played_cp is None:
         return MoveQuality("normal", None)
 

@@ -81,11 +81,21 @@ Recommended numbers (now the defaults in `config.py` / `config.example.yaml`):
 lifted to storage *first*, then the capturing piece moves
 ([choreography.py](../src/chessmachine/motion/choreography.py) `execute_move`).
 
-**Storage capacity caveat.** 16 slots is enough for a typical game's captures,
-but a full **board reset needs 32 transient slots**. With 16, the machine reports
-"not enough storage to auto-reset; reset by hand" rather than failing — so "new
-game" with the default geometry is a manual re-setup. To get automatic resets you
-need ~32 slots, which means a smaller grid (see the open decision below).
+**Storage capacity caveat.** 16 slots covers a typical game, but two cases exceed
+it, and both **degrade gracefully rather than crash**:
+
+- **Mid-game (>16 captures).** Once all 16 slots are full, the next capture is
+  *refused without touching the board* (no logical/physical desync) and the
+  machine asks you to clear the captured pieces off the storage strip; play then
+  continues. A full game can produce up to 30 captures, so this is reachable.
+- **Board reset (needs 32 transient slots).** "New game" stages every piece in
+  storage at once, which needs a free slot per piece on the board. With 16 the
+  machine says it can't reset itself and asks you to set the pieces up by hand
+  (it does *not* claim a reset it didn't perform), then drops its captured-piece
+  bookkeeping to match the hand re-setup.
+
+To make either automatic you need ~32 slots, which means a smaller grid (see the
+open decision below).
 
 **Open decision — 16 vs 32 storage slots.** Storage on *one* edge (2 columns)
 gives 16 slots with a comfortable 15 mm grid. Storage on *both* edges (4 columns

@@ -26,6 +26,9 @@ a logic-level MOSFET — do not drive it from an ESP32 pin directly.
   from its switch.
 - `P_MAX_HEIGHT_MM` — magnet height above the board when the top endstop trips.
   Keep `travel_height_mm` (host config) below this and above the tallest piece.
+- `X_MAX_MM`, `Z_MAX_MM` — soft travel limits; `MOVE` targets are clamped into
+  `[0, *_MAX_MM]` so a bad coordinate can't drive into the frame. Set to your
+  usable axis length.
 - `MAX_FEED_MM_MIN`, `ACCEL_MM_S2` — software stepping on the ESP32 tops out
   around 8–10k steps/s; lower microstepping if you need faster travel.
 

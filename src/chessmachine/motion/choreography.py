@@ -30,6 +30,7 @@ class ExecutionReport:
     description: str = ""
     notes: list[str] = field(default_factory=list)   # manual-intervention prompts
     transfers: int = 0                                # pick+place pairs performed
+    aborted: bool = False                             # nothing actuated; caller must not apply the move
 
 
 class Choreographer:
@@ -99,6 +100,17 @@ class Choreographer:
         """Actuate `move`, given the position *before* it is applied."""
         cls = classify_move(board_before, move)
         report = ExecutionReport(kind=cls.kind)
+
+        # Pre-flight: a capture needs a free storage slot. If none is available,
+        # refuse the move without touching the board, so the logical and physical
+        # positions stay in sync (the caller will not apply the move).
+        if cls.is_capture and cls.captured_piece is not None and self.graveyard.free() == 0:
+            report.aborted = True
+            report.notes.append(
+                "Storage is full — please clear the captured pieces off the board "
+                "before I can take again."
+            )
+            return report
 
         if cls.is_castle:
             self._transfer(self._sq(cls.from_square), self._sq(cls.to_square))   # king
@@ -189,13 +201,22 @@ class Choreographer:
     def setup_starting_position(self, current_board: chess.Board) -> list[str]:
         """Reset the board: clear everything to storage, then place a fresh set.
 
-        Works when total storage capacity covers every physical piece on the
-        board (default geometry provides 32 slots = a full set).
+        Needs a free storage slot per piece on the board (32 for a full set). The
+        reference geometry has only 16 slots, so it falls back to a manual
+        re-setup (returns a note and clears its storage bookkeeping); widen the
+        graveyard to ~32 slots for automatic resets.
         """
         notes: list[str] = []
         on_board = current_board.piece_map()
-        if len(on_board) > self.graveyard.free() + self.graveyard.occupied():
-            notes.append("Not enough storage to auto-reset; please reset by hand.")
+        # The reset stages every piece in storage at once, so it needs a free
+        # slot per piece on the board. The reference hardware (16 slots) can't
+        # hold a full 32-piece set, so it falls back to a manual reset.
+        if len(on_board) > self.graveyard.free():
+            # The human will physically reset the board (and clear storage), so
+            # drop our captured-piece bookkeeping to match.
+            self.graveyard.reset()
+            notes.append("I don't have enough storage to reset the board myself; "
+                         "please set the pieces back up by hand.")
             return notes
 
         # 1) Clear board into storage.

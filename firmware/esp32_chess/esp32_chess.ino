@@ -44,6 +44,8 @@ const int   X_HOME_DIR     = -1;     // sign of travel toward the X endstop
 const int   Z_HOME_DIR     = -1;
 const bool  P_HAS_TOP_ENDSTOP = true;
 const float P_MAX_HEIGHT_MM   = 80.0; // magnet height when the top switch trips
+const float X_MAX_MM          = 150.0; // soft limit: usable X travel (EDIT per axis)
+const float Z_MAX_MM          = 150.0; // soft limit: usable Z travel (EDIT per axis)
 
 const float HOME_BACKOFF_MM = 3.0;
 const float HOME_SPEED_MM_S  = 10.0;
@@ -132,6 +134,12 @@ void doHome() {
 
 // ----------------------------- motion ----------------------------------------
 void doMoveXZ(float xmm, float zmm, float feed) {
+  // Soft limits: clamp into the usable envelope so a bad coordinate can't drive
+  // the gantry into the frame. (Pulley height is clamped likewise in doPulley.)
+  if (xmm < 0)         xmm = 0;
+  if (xmm > X_MAX_MM)  xmm = X_MAX_MM;
+  if (zmm < 0)         zmm = 0;
+  if (zmm > Z_MAX_MM)  zmm = Z_MAX_MM;
   xStep.setMaxSpeed(feedToSps(feed, X_STEPS_PER_MM));
   zStep.setMaxSpeed(feedToSps(feed, Z_STEPS_PER_MM));
   xStep.moveTo((long)(xmm * X_STEPS_PER_MM));

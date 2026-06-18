@@ -14,7 +14,7 @@ from typing import Optional
 
 import chess
 
-from .config import Config, DifficultyPreset
+from .config import Config, DifficultyPreset, preset_from_elo
 from .chess_engine import GameState, ChessEngine, analysis
 from .chess_engine.game import speak_san
 from .motion import Choreographer
@@ -71,7 +71,8 @@ class ChessMachine:
                     self.handle(transcript)
                 except Exception:  # noqa: BLE001 - keep the loop alive
                     log.exception("Error handling utterance %r", transcript)
-                    self._say("Something went wrong with that one. Let's try again.")
+                    self._say("Something went wrong handling that. If a piece was "
+                              "mid-move, please check the board before we continue.")
         finally:
             self.close()
 
@@ -108,6 +109,7 @@ class ChessMachine:
         if a == "undo":
             return self._do_undo()
         if a == "resign":
+            self.game.resign(not self.machine_color)   # the human (our opponent) resigns
             return self._say("You resigned. Good game! Say 'new game' to play again.")
         if a == "repeat":
             return self._say(self._last_spoken or "I haven't said anything yet.")
@@ -142,12 +144,16 @@ class ChessMachine:
     def _do_engine_move(self, prefix: str) -> str:
         if self.game.is_game_over():
             return self._say(self.game.result_text())
+        if not self.game.is_machine_turn():
+            return self._say("It's your move — tell me your move and I'll reply.")
         move = self.engine.best_move(self.game.board)
         if move is None:
             return self._say("I have no legal move to make.")
         return self._say(self._play_move(move, prefix))
 
     def _do_opponent_move(self, intent: Intent) -> str:
+        if self.game.is_game_over():
+            return self._say(self.game.result_text())
         board = self.game.board
         move_text = intent.move or intent.text or ""
         candidates = parse_move(move_text, board)
@@ -167,10 +173,11 @@ class ChessMachine:
     def _do_new_game(self) -> str:
         notes = self.choreo.setup_starting_position(self.game.board)
         self.game.reset()
-        text = "New game. The board is reset."
         if notes:
-            text += " " + " ".join(notes)
-        spoken = self._say(text)
+            # Couldn't fully reset the pieces — don't claim it's done, and don't
+            # start playing on a board the human still has to set up.
+            return self._say("New game. " + " ".join(notes))
+        spoken = self._say("New game. The board is reset.")
         if self.cfg.app.auto_reply and self.game.is_machine_turn():
             return spoken + " " + self._do_engine_move("I'll open with")
         return spoken
@@ -179,16 +186,29 @@ class ChessMachine:
         move = self.game.undo()
         if move is None:
             return self._say("There's no move to take back.")
-        report = self.choreo.reverse_move(self.game.board, move)
-        text = "Move taken back."
-        if report.notes:
-            text += " " + " ".join(report.notes)
+        notes = list(self.choreo.reverse_move(self.game.board, move).notes)
+        count = 1
+        # With auto-reply, a turn is the opponent's move plus our reply. If we
+        # just undid our reply, take the opponent's move back too so it's their
+        # turn again rather than leaving the game mid-turn.
+        if (self.cfg.app.auto_reply and self.game.is_machine_turn()
+                and self.game.board.move_stack):
+            move2 = self.game.undo()
+            if move2 is not None:
+                notes += self.choreo.reverse_move(self.game.board, move2).notes
+                count = 2
+        text = "Both moves taken back." if count == 2 else "Move taken back."
+        if notes:
+            text += " " + " ".join(notes)
         return self._say(text)
 
     # -- helpers ------------------------------------------------------------- #
     def _play_move(self, move: chess.Move, prefix: str) -> str:
         board_before = self.game.board.copy()
         report = self.choreo.execute_move(board_before, move)
+        if report.aborted:
+            # Nothing was actuated; keep the logical board in sync by not applying it.
+            return " ".join(report.notes) or "I can't make that move right now."
         san = self.game.push(move)
         text = f"{prefix} {speak_san(san)}."
         if report.notes:
@@ -242,8 +262,7 @@ class ChessMachine:
         m = re.search(r"(\d{3,4})", name)
         if m:
             elo = int(m.group(1))
-            skill = max(0, min(20, round((elo - 800) / 110)))
-            return f"{elo} Elo", DifficultyPreset(elo=elo, depth=16, movetime_ms=1000, skill=skill)
+            return f"{elo} Elo", preset_from_elo(elo)
         return None
 
     def _last_san(self) -> Optional[str]:

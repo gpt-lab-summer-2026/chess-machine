@@ -85,6 +85,13 @@ class DifficultyPreset:
     skill: int = 10          # Stockfish "Skill Level" 0..20
 
 
+def preset_from_elo(elo: int) -> DifficultyPreset:
+    """Synthesize a difficulty preset from a target Elo (used for ad-hoc
+    'set elo to 1600' requests, by voice or via --difficulty)."""
+    skill = max(0, min(20, round((elo - 800) / 110)))
+    return DifficultyPreset(elo=elo, depth=16, movetime_ms=1000, skill=skill)
+
+
 @dataclass
 class EngineConfig:
     backend: str = "stockfish"               # stockfish | random (dev/fallback)
@@ -205,7 +212,12 @@ def _merge_into(obj, data: dict):
             raise KeyError(f"Unknown config key '{key}' in section '{type(obj).__name__}'")
         f = valid[key]
         cur = getattr(obj, f.name)
-        if is_dataclass(f.type) and isinstance(val, dict):
+        if is_dataclass(f.type):
+            if not isinstance(val, dict):
+                raise TypeError(
+                    f"Config section '{key}' (in '{type(obj).__name__}') expects a "
+                    f"mapping, got {type(val).__name__}"
+                )
             setattr(obj, f.name, _merge_into(cur, val))
         elif f.name == "presets" and isinstance(val, dict):
             merged = dict(cur)

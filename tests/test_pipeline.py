@@ -95,3 +95,71 @@ def test_undo_takes_back():
     assert len(m.game.history) == 1
     m.handle("undo")
     assert len(m.game.history) == 0
+
+
+def test_undo_takes_back_autoreply_pair():
+    # With auto-reply a turn is two plies; "undo" should take back the whole
+    # turn and hand the move back to the human, not leave the game mid-turn.
+    m, _ = make(auto_reply=True, play_as="black")
+    m.handle("e4")
+    assert len(m.game.history) == 2          # human white + machine black
+    m.handle("undo")
+    assert len(m.game.history) == 0
+    assert m.game.turn() == chess.WHITE       # human to move again
+
+
+def test_engine_move_refuses_when_not_machine_turn():
+    # Machine plays black; at the start it's the human's (white's) move.
+    m, tts = make(auto_reply=False, play_as="black")
+    before = len(m.game.history)
+    m.handle("your move")
+    assert len(m.game.history) == before      # didn't move out of turn
+    assert any("your move" in l.lower() for l in tts.lines)
+
+
+def test_resign_ends_game_and_blocks_further_moves():
+    m, tts = make(auto_reply=False)
+    m.handle("e4")
+    m.handle("I resign")
+    assert m.game.is_game_over()
+    assert any("resign" in l.lower() for l in tts.lines)
+    n = len(m.game.history)
+    m.handle("e5")                            # game is over -> not applied
+    assert len(m.game.history) == n
+
+
+def test_capture_aborts_cleanly_when_storage_full():
+    # Filling storage must not crash a capture or desync the board: the move is
+    # simply refused with a spoken prompt to clear the captured pieces.
+    m, tts = make(auto_reply=False)
+    gy = m.choreo.graveyard
+    for _ in range(gy.capacity):
+        gy.store(chess.Piece(chess.PAWN, chess.WHITE))
+    m.handle("e4"); m.handle("d5")
+    n_before = len(m.game.history)
+    tts.lines.clear()
+    m.handle("exd5")
+    assert len(m.game.history) == n_before    # capture NOT applied (no desync)
+    assert any("storage" in l.lower() for l in tts.lines)
+
+
+def test_new_game_default_storage_is_honest():
+    # On the 16-slot reference hardware a full reset can't be staged, so the
+    # machine must NOT claim the board is reset — it asks for a manual setup.
+    m, tts = make(auto_reply=False)
+    m.handle("e4"); m.handle("d5")
+    tts.lines.clear()
+    m.handle("new game")
+    spoken = " ".join(tts.lines).lower()
+    assert "by hand" in spoken
+    assert "the board is reset" not in spoken
+    assert m.game.board == chess.Board()      # logical board still resets
+
+
+def test_new_game_clears_stale_storage():
+    m, _ = make(auto_reply=False)
+    gy = m.choreo.graveyard
+    gy.store(chess.Piece(chess.PAWN, chess.WHITE))
+    assert gy.occupied() == 1
+    m.handle("new game")
+    assert gy.occupied() == 0

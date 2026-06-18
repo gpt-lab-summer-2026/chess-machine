@@ -75,13 +75,17 @@ Flash the ESP32 first — see **[firmware/esp32_chess/](firmware/esp32_chess/)**
 | You say | Action |
 |---|---|
 | "knight to f3", "e2 to e4", "castle kingside", "pawn takes d5" | play your move (machine actuates it) |
-| "your move", "okay, go" | machine plays its move |
+| "your move", "okay, go" | machine plays its move (only when it's its turn) |
 | "who's winning?", "what's the best move?", "any threats?" | spoken analysis |
 | "set difficulty to easy / medium / hard", "set elo to 1600" | change strength |
 | "new game", "take that back", "whose turn is it?" | reset / undo / status |
+| "I resign", "I give up" | end the game (you lose); say "new game" to play again |
 
 With `auto_reply` on (default), stating your move makes the machine immediately
-reply with its own — so a turn is one spoken sentence from you.
+reply with its own — so a turn is one spoken sentence from you. Two follow-ons
+respect that pairing: **"take that back" undoes the whole turn** (your move *and*
+the machine's reply) so it's your move again, and **"your move"** is declined when
+it's actually your turn rather than the machine playing your colour.
 
 ## Repo layout
 
@@ -116,8 +120,12 @@ motor), intent routing, and an end-to-end scripted game (including Scholar's mat
 - **Promotions** need a spare piece pre-stocked in storage to auto-swap;
   otherwise the machine carries the pawn and asks you to swap it by hand.
 - **Undo of a promotion** asks for a manual pawn swap (the rest of undo is automatic).
-- Auto board **reset** requires enough storage slots for a full set (the default
-  geometry provides 32).
+- **Storage is finite.** The reference geometry has 16 off-board slots (all that
+  fits within the 150 mm gantry stroke), so once 16 pieces have been captured the
+  machine asks you to clear them before it can take again. Auto board **reset**
+  needs a free slot per piece (32 for a full set), which exceeds 16 — so on the
+  reference hardware "new game" asks you to set the pieces up by hand. Widen the
+  graveyard (more columns, a longer axis) if you want either to be automatic.
 - The `rule_based` SLM fallback is keyword-based; the llama.cpp SLM handles
   nuance far better. The fallback keeps the machine usable if the model is down.
 

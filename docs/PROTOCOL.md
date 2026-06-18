@@ -27,6 +27,10 @@ Implemented by [`firmware/esp32_chess`](../firmware/esp32_chess/) (device) and
   surface, larger = magnet higher / cable retracted).
 - **Argument order is free:** `MOVE Z50 X20 F3000` is valid. Missing axis args
   keep the current value; missing `F` uses the firmware default feed.
+- **Soft limits:** targets are clamped into the usable envelope — `MOVE` to
+  `[0, X_MAX_MM]` × `[0, Z_MAX_MM]`, `PULLEY` to `[0, P_MAX_HEIGHT_MM]` — so a bad
+  coordinate can't drive an axis into the frame. Out-of-range values are clamped
+  (and still reply `OK`), not rejected; set the limits at the top of the sketch.
 - **Acknowledgements:** a line starting with `OK` is success (optionally followed
   by a payload). A line starting with `ERR ` is a failure (e.g. `ERR estopped;
   send HOME to clear`, `ERR MAG expects ON or OFF`). The host raises on `ERR`.

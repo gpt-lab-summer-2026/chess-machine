@@ -103,11 +103,17 @@ class GameState:
         self.machine_color = machine_color
         self.board = chess.Board(start_fen) if start_fen else chess.Board()
         self.history: list[tuple[chess.Move, str]] = []
+        self._resigned_by: Optional[bool] = None   # color that resigned, if any
 
     # -- mutation --------------------------------------------------------- #
     def reset(self, start_fen: Optional[str] = None) -> None:
         self.board = chess.Board(start_fen) if start_fen else chess.Board()
         self.history.clear()
+        self._resigned_by = None
+
+    def resign(self, color: bool) -> None:
+        """Record that `color` resigned; the other side wins."""
+        self._resigned_by = color
 
     def push(self, move: chess.Move) -> str:
         """Apply a (legal) move, returning its SAN."""
@@ -117,6 +123,7 @@ class GameState:
         return san
 
     def undo(self) -> Optional[chess.Move]:
+        self._resigned_by = None   # taking a move back puts the game back in play
         if not self.board.move_stack:
             return None
         move = self.board.pop()
@@ -150,13 +157,17 @@ class GameState:
         return self.board.peek() if self.board.move_stack else None
 
     def is_game_over(self) -> bool:
-        return self.board.is_game_over(claim_draw=True)
+        return self._resigned_by is not None or self.board.is_game_over(claim_draw=True)
 
     @staticmethod
     def color_name(color: bool) -> str:
         return "White" if color == chess.WHITE else "Black"
 
     def result_text(self) -> str:
+        if self._resigned_by is not None:
+            loser = self.color_name(self._resigned_by)
+            winner = self.color_name(not self._resigned_by)
+            return f"{loser} resigned. {winner} wins."
         outcome = self.board.outcome(claim_draw=True)
         if outcome is None:
             return "The game is still in progress."
