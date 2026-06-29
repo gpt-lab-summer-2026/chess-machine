@@ -163,3 +163,20 @@ def test_new_game_clears_stale_storage():
     assert gy.occupied() == 1
     m.handle("new game")
     assert gy.occupied() == 0
+
+
+def test_autoreply_failure_keeps_opponent_move_and_warns():
+    # If the engine's auto-reply blows up, the human's move (already played and
+    # announced) must stick, and we warn instead of making it look like the
+    # human's move failed.
+    m, tts = make(auto_reply=True, play_as="black")
+
+    def boom(board):
+        raise RuntimeError("engine crashed")
+
+    m.engine.best_move = boom            # make the auto-reply fail
+    tts.lines.clear()
+    m.handle("e4")                       # human move succeeds; reply blows up
+    assert [san for _, san in m.game.history] == ["e4"]   # human's move stuck, no reply
+    spoken = " ".join(tts.lines).lower()
+    assert "reply" in spoken and "check the board" in spoken

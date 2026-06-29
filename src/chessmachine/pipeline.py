@@ -71,6 +71,7 @@ class ChessMachine:
                     self.handle(transcript)
                 except Exception:  # noqa: BLE001 - keep the loop alive
                     log.exception("Error handling utterance %r", transcript)
+                    self._safe_park()   # release the magnet + lift if a piece was mid-move
                     self._say("Something went wrong handling that. If a piece was "
                               "mid-move, please check the board before we continue.")
         finally:
@@ -83,6 +84,14 @@ class ChessMachine:
 
     def _park(self) -> None:
         self.choreo.park()
+
+    def _safe_park(self) -> None:
+        """Best-effort safe state after an error: lift the magnet and release it,
+        so a half-finished move can't leave a piece stuck to the electromagnet."""
+        try:
+            self.choreo.park()
+        except Exception:  # noqa: BLE001 - recovery must never raise
+            log.exception("Failed to park after an error")
 
     # -- top-level dispatch -------------------------------------------------- #
     def handle(self, transcript: str) -> str:
@@ -161,10 +170,18 @@ class ChessMachine:
             return self._say(f"That move is ambiguous — did you mean "
                              f"{describe_candidates(candidates, board)}?")
         spoken = self._say(self._play_move(candidates[0], "Okay,"))
-        # Auto-reply with the engine's move if it's now our turn.
+        # Auto-reply with the engine's move if it's now our turn. Guard it so a
+        # failure in our reply isn't reported as the human's move failing — their
+        # move has already been played and announced.
         if (self.cfg.app.auto_reply and not self.game.is_game_over()
                 and self.game.is_machine_turn()):
-            reply = self._do_engine_move("My move:")
+            try:
+                reply = self._do_engine_move("My move:")
+            except Exception:  # noqa: BLE001 - the opponent's move already stuck
+                log.exception("Auto-reply failed after the opponent's move")
+                self._safe_park()
+                note = self._say("I couldn't make my reply just now; please check the board.")
+                return spoken + " " + note
             return spoken + " " + reply
         return spoken
 
