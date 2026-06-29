@@ -1,12 +1,12 @@
 import chess
 import pytest
 
-from chessmachine.config import GeometryConfig, SpeedsConfig, MagnetConfig
-from chessmachine.motion.geometry import BoardGeometry
-from chessmachine.motion.mock import MockMotion
-from chessmachine.motion.graveyard import Graveyard
-from chessmachine.motion.choreography import Choreographer
 from chessmachine.chess_engine.game import MoveKind
+from chessmachine.config import GeometryConfig, MagnetConfig, SpeedsConfig
+from chessmachine.motion.choreography import Choreographer
+from chessmachine.motion.geometry import BoardGeometry
+from chessmachine.motion.graveyard import Graveyard
+from chessmachine.motion.mock import MockMotion
 
 
 def _rig(geo_cfg=None):

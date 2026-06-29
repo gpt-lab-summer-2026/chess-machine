@@ -18,7 +18,7 @@ class Point:
     x: float
     z: float
 
-    def rounded(self, ndigits: int = 2) -> "Point":
+    def rounded(self, ndigits: int = 2) -> Point:
         return Point(round(self.x, ndigits), round(self.z, ndigits))
 
 

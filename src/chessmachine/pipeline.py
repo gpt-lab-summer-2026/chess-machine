@@ -8,17 +8,17 @@ so it can be driven by real speech, typed text, or tests identically.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
-from typing import Optional
 
 import chess
 
-from .config import Config, DifficultyPreset, preset_from_elo
-from .chess_engine import GameState, ChessEngine, analysis
+from .chess_engine import ChessEngine, GameState, analysis
 from .chess_engine.game import speak_san
+from .config import Config, DifficultyPreset, preset_from_elo
 from .motion import Choreographer
-from .nlu import NLU, parse_move, describe_candidates
+from .nlu import NLU, describe_candidates, parse_move
 from .nlu.intents import Intent
 from .voice.stt import STT
 from .voice.tts import TTS
@@ -78,10 +78,8 @@ class ChessMachine:
 
     def close(self) -> None:
         for fn in (self._park, self.choreo.close, self.engine.close, self.nlu.close):
-            try:
+            with contextlib.suppress(Exception):
                 fn()
-            except Exception:  # noqa: BLE001
-                pass
 
     def _park(self) -> None:
         self.choreo.park()
@@ -252,7 +250,7 @@ class ChessMachine:
             log.exception("Move commentary failed")
             return ""
 
-    def _resolve_difficulty(self, name: str) -> Optional[tuple[str, DifficultyPreset]]:
+    def _resolve_difficulty(self, name: str) -> tuple[str, DifficultyPreset] | None:
         name = (name or "").strip().lower()
         if not name:
             return None
@@ -265,7 +263,7 @@ class ChessMachine:
             return f"{elo} Elo", preset_from_elo(elo)
         return None
 
-    def _last_san(self) -> Optional[str]:
+    def _last_san(self) -> str | None:
         return self.game.history[-1][1] if self.game.history else None
 
     def _context(self) -> dict:

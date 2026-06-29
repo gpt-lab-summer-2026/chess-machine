@@ -10,7 +10,6 @@ ever resolve to legal moves (or to an empty/ambiguous list the caller re-asks on
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 import chess
 
@@ -46,7 +45,7 @@ def normalize_spoken(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
-def _try_exact(text: str, board: chess.Board) -> Optional[chess.Move]:
+def _try_exact(text: str, board: chess.Board) -> chess.Move | None:
     s = text.strip()
     # SAN (handles Nf3, exd5, O-O, e8=Q+, ...). parse_san already checks legality.
     for cand in (s, s.replace("0", "O")):
@@ -102,13 +101,13 @@ def parse_move(text: str, board: chess.Board) -> list[chess.Move]:
     candidates.extend(_castling_candidates(t, board))
 
     # Detect a requested promotion piece ("promote to queen", or a trailing piece word).
-    promo_type: Optional[int] = None
+    promo_type: int | None = None
     m = re.search(r"promot\w*\s+(?:to\s+)?(king|queen|rook|bishop|knight)", t)
     if m:
         promo_type = _PIECE_WORDS[m.group(1)]
 
     # Moving piece word (knight, queen, ...).
-    piece_type: Optional[int] = None
+    piece_type: int | None = None
     for word, ptype in _PIECE_WORDS.items():
         if re.search(rf"\b{word}\b", t):
             piece_type = ptype
@@ -130,7 +129,7 @@ def parse_move(text: str, board: chess.Board) -> list[chess.Move]:
         moves_to = [mv for mv in board.legal_moves if mv.to_square == to_sq]
         if piece_type is not None and promo_type is None:
             by_mover = [mv for mv in moves_to
-                        if board.piece_at(mv.from_square).piece_type == piece_type]
+                        if (p := board.piece_at(mv.from_square)) and p.piece_type == piece_type]
             # If naming the piece empties the list but promotions exist, the word
             # was the promotion target (e.g. "knight on a8"), not the mover.
             candidates.extend(by_mover if by_mover else moves_to)
@@ -141,7 +140,7 @@ def parse_move(text: str, board: chess.Board) -> list[chess.Move]:
 
 
 def _resolve(candidates: list[chess.Move], board: chess.Board,
-             promo_pref: Optional[int]) -> list[chess.Move]:
+             promo_pref: int | None) -> list[chess.Move]:
     """De-dupe, keep only legal moves, and collapse promotion ambiguity."""
     legal = []
     seen = set()
@@ -154,7 +153,11 @@ def _resolve(candidates: list[chess.Move], board: chess.Board,
     if promos and len(legal) == len(promos):
         # Every candidate is a promotion of the same pawn: pick the requested
         # piece, defaulting to a queen, so we return a single move.
-        want = promo_pref if promo_pref in (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT) else _PROMO_DEFAULT
+        want = (
+            promo_pref
+            if promo_pref in (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
+            else _PROMO_DEFAULT
+        )
         chosen = [m for m in promos if m.promotion == want]
         if chosen:
             return chosen[:1]

@@ -1,8 +1,7 @@
 """Intent schema shared by the SLM and the rule-based fallback."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 # The full set of actions the controller can dispatch.
 ACTIONS = {
@@ -39,18 +38,18 @@ INTENT_JSON_SCHEMA = {
 @dataclass
 class Intent:
     action: str
-    move: Optional[str] = None
-    difficulty: Optional[str] = None
-    question: Optional[str] = None
-    text: Optional[str] = None            # original transcript
-    raw: Optional[dict] = None            # raw model output, for debugging
+    move: str | None = None
+    difficulty: str | None = None
+    question: str | None = None
+    text: str | None = None            # original transcript
+    raw: dict | None = None            # raw model output, for debugging
 
     def __post_init__(self):
         if self.action not in ACTIONS:
             self.action = "unknown"
 
 
-def _clean(val) -> Optional[str]:
+def _clean(val) -> str | None:
     if val is None:
         return None
     s = str(val).strip()

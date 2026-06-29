@@ -10,7 +10,6 @@ not stringized annotations.
 """
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -29,8 +28,8 @@ class VadConfig:
 
 @dataclass
 class AudioConfig:
-    input_device: Optional[str] = None      # None = system default
-    output_device: Optional[str] = None
+    input_device: str | None = None      # None = system default
+    output_device: str | None = None
     sample_rate: int = 16000                 # whisper expects 16 kHz mono
     channels: int = 1
     push_to_talk: bool = False               # if True, record while a key is held

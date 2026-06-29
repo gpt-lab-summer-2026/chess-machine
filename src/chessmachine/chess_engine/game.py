@@ -7,9 +7,8 @@ bridge between chess rules and the motion choreography.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
 
 import chess
 
@@ -32,12 +31,12 @@ class MoveClassification:
     is_capture: bool = False
     is_en_passant: bool = False
     is_castle: bool = False
-    castle_side: Optional[str] = None        # "king" | "queen"
-    promotion: Optional[int] = None          # chess.PieceType promoted to
-    captured_square: Optional[int] = None    # where the captured piece sits
-    captured_piece: Optional[chess.Piece] = None
-    rook_from: Optional[int] = None          # castling rook travel
-    rook_to: Optional[int] = None
+    castle_side: str | None = None        # "king" | "queen"
+    promotion: int | None = None          # chess.PieceType promoted to
+    captured_square: int | None = None    # where the captured piece sits
+    captured_piece: chess.Piece | None = None
+    rook_from: int | None = None          # castling rook travel
+    rook_to: int | None = None
 
     @property
     def kind(self) -> MoveKind:
@@ -99,14 +98,14 @@ def classify_move(board: chess.Board, move: chess.Move) -> MoveClassification:
 class GameState:
     """Logical board + history. Knows nothing about hardware or speech."""
 
-    def __init__(self, machine_color: bool = chess.BLACK, start_fen: Optional[str] = None):
+    def __init__(self, machine_color: bool = chess.BLACK, start_fen: str | None = None):
         self.machine_color = machine_color
         self.board = chess.Board(start_fen) if start_fen else chess.Board()
         self.history: list[tuple[chess.Move, str]] = []
-        self._resigned_by: Optional[bool] = None   # color that resigned, if any
+        self._resigned_by: bool | None = None   # color that resigned, if any
 
     # -- mutation --------------------------------------------------------- #
-    def reset(self, start_fen: Optional[str] = None) -> None:
+    def reset(self, start_fen: str | None = None) -> None:
         self.board = chess.Board(start_fen) if start_fen else chess.Board()
         self.history.clear()
         self._resigned_by = None
@@ -122,7 +121,7 @@ class GameState:
         self.history.append((move, san))
         return san
 
-    def undo(self) -> Optional[chess.Move]:
+    def undo(self) -> chess.Move | None:
         self._resigned_by = None   # taking a move back puts the game back in play
         if not self.board.move_stack:
             return None
@@ -153,7 +152,7 @@ class GameState:
     def classify(self, move: chess.Move) -> MoveClassification:
         return classify_move(self.board, move)
 
-    def last_move(self) -> Optional[chess.Move]:
+    def last_move(self) -> chess.Move | None:
         return self.board.peek() if self.board.move_stack else None
 
     def is_game_over(self) -> bool:

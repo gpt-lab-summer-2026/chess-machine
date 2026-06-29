@@ -16,8 +16,8 @@ import sys
 
 import yaml
 
-from .config import load_config, Config, preset_from_elo
 from . import factory
+from .config import Config, load_config, preset_from_elo
 from .pipeline import ChessMachine
 
 
@@ -25,13 +25,17 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="chessmachine", description=__doc__)
     p.add_argument("--config", help="path to a YAML config file")
     p.add_argument("--dev", action="store_true",
-                   help="dev mode: stdin STT, stdout TTS, rule-based NLU, random engine, mock motor")
-    p.add_argument("--text", action="store_true", help="typed input + printed output (keeps real engine/motor)")
+                   help="dev mode: stdin STT, stdout TTS, rule-based NLU, "
+                        "random engine, mock motor")
+    p.add_argument("--text", action="store_true",
+                   help="typed input + printed output (keeps real engine/motor)")
     p.add_argument("--mock", action="store_true", help="use the mock motion backend (no hardware)")
     p.add_argument("--engine", choices=["stockfish", "random"], help="override engine backend")
     p.add_argument("--slm", choices=["llama_cpp", "rule_based"], help="override SLM backend")
     p.add_argument("--play-as", choices=["white", "black"], help="color the machine plays")
-    p.add_argument("--difficulty", help="starting difficulty: a preset (easy/medium/hard) or an Elo number, e.g. 1600")
+    p.add_argument("--difficulty",
+                   help="starting difficulty: a preset (easy/medium/hard) or an "
+                        "Elo number, e.g. 1600")
     p.add_argument("--once", metavar="TEXT", help="handle one utterance then exit")
     p.add_argument("--no-home", action="store_true", help="skip homing on startup")
     p.add_argument("--log-level", default=None, help="DEBUG/INFO/WARNING/ERROR")

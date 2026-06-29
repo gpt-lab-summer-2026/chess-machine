@@ -1,13 +1,13 @@
 """End-to-end orchestration with everything mocked (no hardware, no models)."""
 import chess
 
+from chessmachine.chess_engine.engine import RandomEngine
 from chessmachine.config import Config, SlmConfig
-from chessmachine.pipeline import ChessMachine
 from chessmachine.factory import build_choreographer
 from chessmachine.nlu import create_nlu
-from chessmachine.chess_engine.engine import RandomEngine
-from chessmachine.voice.tts import TTS
+from chessmachine.pipeline import ChessMachine
 from chessmachine.voice.stt import StdinSTT
+from chessmachine.voice.tts import TTS
 
 
 class CaptureTTS(TTS):

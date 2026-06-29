@@ -35,6 +35,7 @@ class StdinSTT(STT):
 class DistilWhisperSTT(STT):
     def __init__(self, cfg: SttConfig, audio_cfg: AudioConfig):
         from faster_whisper import WhisperModel  # lazy: heavy dependency
+
         from .audio import AudioCapture
 
         log.info("Loading distil-whisper model %s (%s/%s)...",

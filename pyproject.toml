@@ -28,7 +28,7 @@ voice = [
 motion = ["pyserial>=3.5"]
 # In-process SLM (alternative to running llama-server separately)
 slm = ["llama-cpp-python>=0.2.70"]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "pytest-cov>=4", "ruff>=0.6", "mypy>=1.10", "types-PyYAML"]
 
 [project.scripts]
 chessmachine = "chessmachine.app:main"
@@ -40,3 +40,47 @@ where = ["src"]
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
+
+# Linting only — formatting is left to the author's hand-formatting (we do not
+# run `ruff format`). `scripts/` are interactive dev utilities, not part of the
+# shipped package, so they're excluded.
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["scripts"]
+
+[tool.ruff.lint]
+# E/F: pyflakes+pycodestyle, I: import sorting, UP: pyupgrade,
+# B: bugbear, SIM: simplify. Pragmatic starter set.
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# B027: empty methods in our ABCs (close/small_talk) are intentional optional
+# hooks with a default no-op, not mistakes.
+ignore = ["B027"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use a deliberately compact style: semicolon-joined board setup and
+# short comprehension variables. Don't enforce E702/E741 there.
+"tests/**" = ["E702", "E741"]
+
+# Type-checking. Pragmatic to start (not --strict); tighten in a later pass.
+[tool.mypy]
+python_version = "3.10"
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+# Lazily-imported heavy deps without bundled stubs — don't fail on missing imports.
+[[tool.mypy.overrides]]
+module = [
+    "serial",
+    "sounddevice",
+    "webrtcvad",
+    "numpy",
+    "faster_whisper",
+    "kokoro_onnx",
+    "llama_cpp",
+]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["chessmachine"]

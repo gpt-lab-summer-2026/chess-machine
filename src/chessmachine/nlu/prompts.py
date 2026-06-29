@@ -1,6 +1,11 @@
 """Prompt construction for the SLM (intent classification + answer phrasing)."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..chess_engine.analysis import PositionFacts
+
 INTENT_SYSTEM = """You control a voice-operated chess robot. Convert the user's \
 utterance into ONE JSON object and output nothing else.
 
@@ -46,7 +51,9 @@ def _context_line(context: dict) -> str:
 
 
 def build_intent_messages(transcript: str, context: dict) -> list[dict]:
-    messages = [{"role": "system", "content": INTENT_SYSTEM.format(context_line=_context_line(context))}]
+    messages = [
+        {"role": "system", "content": INTENT_SYSTEM.format(context_line=_context_line(context))}
+    ]
     for user, assistant in INTENT_EXAMPLES:
         messages.append({"role": "user", "content": user})
         messages.append({"role": "assistant", "content": assistant})
@@ -54,14 +61,18 @@ def build_intent_messages(transcript: str, context: dict) -> list[dict]:
     return messages
 
 
-def facts_to_text(facts: dict) -> str:
+def facts_to_text(facts: PositionFacts) -> str:
     lines = [f"evaluation: {facts.get('verdict', 'unknown')}"]
     mat = facts.get("material", {})
     if mat:
-        lines.append(f"material: white {mat.get('white')} vs black {mat.get('black')} "
-                     f"(difference {mat.get('diff')} in {'white' if mat.get('diff', 0) >= 0 else 'black'}'s favor)")
-    if facts.get("best_move_san"):
-        line = facts.get("pv_sans") or [facts["best_move_san"]]
+        lines.append(
+            f"material: white {mat.get('white')} vs black {mat.get('black')} "
+            f"(difference {mat.get('diff')} in "
+            f"{'white' if mat.get('diff', 0) >= 0 else 'black'}'s favor)"
+        )
+    best = facts.get("best_move_san")
+    if best:
+        line = facts.get("pv_sans") or [best]
         lines.append("best line: " + " ".join(line))
     turn = facts.get("turn", "?")
     lines.append(f"{turn} to move" + (", and is in check" if facts.get("in_check") else ""))
@@ -71,7 +82,7 @@ def facts_to_text(facts: dict) -> str:
     return "\n".join(lines)
 
 
-def build_analysis_messages(question: str, facts: dict) -> list[dict]:
+def build_analysis_messages(question: str, facts: PositionFacts) -> list[dict]:
     return [
         {"role": "system", "content": PHRASE_SYSTEM.format(facts=facts_to_text(facts))},
         {"role": "user", "content": question or "How does the position look?"},

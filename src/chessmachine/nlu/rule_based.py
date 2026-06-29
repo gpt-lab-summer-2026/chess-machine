@@ -8,12 +8,11 @@ chess move.
 from __future__ import annotations
 
 import re
-from typing import Optional
 
-from ..chess_engine.analysis import facts_to_summary
+from ..chess_engine.analysis import PositionFacts, facts_to_summary
 from .base import NLU
 from .intents import Intent
-from .move_parsing import parse_move, normalize_spoken
+from .move_parsing import normalize_spoken, parse_move
 
 _DIFFICULTY_RE = re.compile(r"\b(easy|medium|hard)\b")
 _NUMBER_RE = re.compile(r"\b(\d{3,4})\b")
@@ -46,7 +45,7 @@ class RuleBasedNLU(NLU):
             return Intent("help", text=transcript)
 
         if _has(t, "difficulty", "level", "elo") or _DIFFICULTY_RE.search(t):
-            diff: Optional[str] = None
+            diff: str | None = None
             m = _DIFFICULTY_RE.search(t)
             if m:
                 diff = m.group(1)
@@ -77,7 +76,7 @@ class RuleBasedNLU(NLU):
 
         return Intent("unknown", text=transcript)
 
-    def phrase_analysis(self, question: str, facts: dict) -> str:
+    def phrase_analysis(self, question: str, facts: PositionFacts) -> str:
         q = (question or "").lower()
         summary = facts_to_summary(facts)
         if "best move" in q and facts.get("best_move_san"):

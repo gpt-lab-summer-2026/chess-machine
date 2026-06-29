@@ -7,8 +7,12 @@ for whisper. Heavy deps are imported lazily so the module loads without them.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from ..config import AudioConfig
+
+if TYPE_CHECKING:
+    import numpy as np
 
 log = logging.getLogger(__name__)
 
@@ -17,14 +21,14 @@ class AudioCapture:
     def __init__(self, cfg: AudioConfig):
         self.cfg = cfg
 
-    def record_utterance(self):
+    def record_utterance(self) -> np.ndarray:
         """Record one utterance; return a float32 numpy array at cfg.sample_rate."""
         if self.cfg.vad.enabled:
             return self._record_vad()
         return self._record_fixed(self.cfg.vad.max_utterance_s)
 
     # -- VAD-gated capture --------------------------------------------------- #
-    def _record_vad(self):
+    def _record_vad(self) -> np.ndarray:
         import numpy as np
         import sounddevice as sd
         import webrtcvad
@@ -65,8 +69,7 @@ class AudioCapture:
         return (pcm.astype(np.float32) / 32768.0)
 
     # -- fixed-duration capture (VAD disabled) ------------------------------- #
-    def _record_fixed(self, seconds: float):
-        import numpy as np
+    def _record_fixed(self, seconds: float) -> np.ndarray:
         import sounddevice as sd
 
         sr = self.cfg.sample_rate
@@ -77,7 +80,7 @@ class AudioCapture:
         return audio.reshape(-1)
 
 
-def play(samples, sample_rate: int, device=None) -> None:
+def play(samples: np.ndarray, sample_rate: int, device: int | str | None = None) -> None:
     """Play float32 samples on the speaker, blocking until done."""
     import sounddevice as sd
 

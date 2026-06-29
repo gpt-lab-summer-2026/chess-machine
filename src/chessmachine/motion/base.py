@@ -7,7 +7,6 @@ ESP32-over-serial for a mock (or a future transport) changes nothing upstream.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 
 class MotionController(ABC):
@@ -24,11 +23,11 @@ class MotionController(ABC):
         """Home all axes against their endstops; defines (0,0) and zero height."""
 
     @abstractmethod
-    def move_xz(self, x_mm: float, z_mm: float, feed: Optional[int] = None) -> None:
+    def move_xz(self, x_mm: float, z_mm: float, feed: int | None = None) -> None:
         """Move the gantry to (x,z) in mm. Blocks until the move completes."""
 
     @abstractmethod
-    def set_pulley(self, height_mm: float, feed: Optional[int] = None) -> None:
+    def set_pulley(self, height_mm: float, feed: int | None = None) -> None:
         """Raise/lower the electromagnet to `height_mm` above the board."""
 
     @abstractmethod

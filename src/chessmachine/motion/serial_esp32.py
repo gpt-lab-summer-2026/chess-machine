@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
+from typing import Any
 
 from ..config import SerialConfig
 from .base import MotionController
@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 class SerialMotion(MotionController):
     def __init__(self, cfg: SerialConfig):
         self.cfg = cfg
-        self._ser = None
+        self._ser: Any = None   # pyserial Serial handle (opened in connect())
 
     # -- lifecycle ----------------------------------------------------------- #
     def connect(self) -> None:
@@ -56,8 +56,8 @@ class SerialMotion(MotionController):
                 return raw.decode(errors="replace").strip()
         raise TimeoutError("Timed out waiting for ESP32 reply")
 
-    def _command(self, line: str, expect: Optional[str] = None,
-                 timeout: Optional[float] = None) -> str:
+    def _command(self, line: str, expect: str | None = None,
+                 timeout: float | None = None) -> str:
         if self._ser is None:
             raise RuntimeError("SerialMotion not connected; call connect() first")
         self._ser.write((line + "\n").encode())
@@ -80,17 +80,17 @@ class SerialMotion(MotionController):
             log.debug("esp32(unparsed): %s", resp)
 
     @staticmethod
-    def _feed(feed: Optional[int]) -> str:
+    def _feed(feed: int | None) -> str:
         return f" F{int(feed)}" if feed else ""
 
     # -- primitives ---------------------------------------------------------- #
     def home(self) -> None:
         self._command("HOME", expect="HOMED", timeout=self.cfg.home_timeout_s)
 
-    def move_xz(self, x_mm: float, z_mm: float, feed: Optional[int] = None) -> None:
+    def move_xz(self, x_mm: float, z_mm: float, feed: int | None = None) -> None:
         self._command(f"MOVE X{x_mm:.2f} Z{z_mm:.2f}{self._feed(feed)}")
 
-    def set_pulley(self, height_mm: float, feed: Optional[int] = None) -> None:
+    def set_pulley(self, height_mm: float, feed: int | None = None) -> None:
         self._command(f"PULLEY H{height_mm:.2f}{self._feed(feed)}")
 
     def magnet(self, on: bool) -> None:

@@ -1,5 +1,5 @@
 """CLI argument handling: overrides and graceful failure."""
-from chessmachine.app import main, _apply_overrides, _parse_args
+from chessmachine.app import _apply_overrides, _parse_args, main
 from chessmachine.config import Config
 
 

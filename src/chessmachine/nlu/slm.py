@@ -11,12 +11,15 @@ import json
 import logging
 import urllib.error
 import urllib.request
-from typing import Optional
+from typing import TYPE_CHECKING, Any
 
 from ..config import SlmConfig
 from .base import NLU
-from .intents import intent_from_json, Intent
-from .prompts import build_intent_messages, build_analysis_messages, build_move_comment_messages
+from .intents import Intent, intent_from_json
+from .prompts import build_analysis_messages, build_intent_messages, build_move_comment_messages
+
+if TYPE_CHECKING:
+    from ..chess_engine.analysis import PositionFacts
 
 log = logging.getLogger(__name__)
 
@@ -24,11 +27,11 @@ log = logging.getLogger(__name__)
 class LlamaCppClient:
     def __init__(self, cfg: SlmConfig):
         self.cfg = cfg
-        self._llm = None  # lazily created in-process model
+        self._llm: Any = None  # lazily created in-process model
 
     def chat(self, messages: list[dict], json_mode: bool = False,
-             temperature: Optional[float] = None,
-             max_tokens: Optional[int] = None) -> str:
+             temperature: float | None = None,
+             max_tokens: int | None = None) -> str:
         temp = self.cfg.temperature if temperature is None else temperature
         maxt = self.cfg.max_tokens if max_tokens is None else max_tokens
         if self.cfg.mode == "inproc":
@@ -106,7 +109,7 @@ class SlmNLU(NLU):
             log.warning("SLM interpret failed (%s); using rule-based fallback", exc)
         return self.fallback.interpret(transcript, context)
 
-    def phrase_analysis(self, question: str, facts: dict) -> str:
+    def phrase_analysis(self, question: str, facts: PositionFacts) -> str:
         try:
             text = self.client.chat(
                 build_analysis_messages(question, facts),

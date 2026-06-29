@@ -1,7 +1,7 @@
 import chess
 import pytest
 
-from chessmachine.nlu.move_parsing import parse_move, normalize_spoken
+from chessmachine.nlu.move_parsing import normalize_spoken, parse_move
 
 
 def ucis(text, board=None):

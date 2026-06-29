@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from .intents import Intent
+
+if TYPE_CHECKING:
+    from ..chess_engine.analysis import PositionFacts
 
 
 class NLU(ABC):
@@ -12,7 +16,7 @@ class NLU(ABC):
         """Classify an utterance into an Intent. `context` carries the live board."""
 
     @abstractmethod
-    def phrase_analysis(self, question: str, facts: dict) -> str:
+    def phrase_analysis(self, question: str, facts: PositionFacts) -> str:
         """Phrase a spoken answer to a position question, grounded in `facts`."""
 
     def small_talk(self, transcript: str, context: dict) -> str:

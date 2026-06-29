@@ -6,8 +6,6 @@ The piece identities let a reset rebuild the exact starting position.
 """
 from __future__ import annotations
 
-from typing import Optional
-
 import chess
 
 from .geometry import Point
@@ -20,7 +18,7 @@ class GraveyardFull(RuntimeError):
 class Graveyard:
     def __init__(self, slots: list[Point]):
         self.slots = slots
-        self.contents: list[Optional[chess.Piece]] = [None] * len(slots)
+        self.contents: list[chess.Piece | None] = [None] * len(slots)
 
     @property
     def capacity(self) -> int:
@@ -42,7 +40,7 @@ class Graveyard:
             f"({self.occupied()}/{self.capacity} used)"
         )
 
-    def retrieve(self, piece_type: int, color: bool) -> Optional[Point]:
+    def retrieve(self, piece_type: int, color: bool) -> Point | None:
         """Free and return the slot of a matching piece, or None if absent."""
         for i, cur in enumerate(self.contents):
             if cur is not None and cur.piece_type == piece_type and cur.color == color:

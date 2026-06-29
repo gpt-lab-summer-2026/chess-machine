@@ -1,4 +1,3 @@
-import chess
 import pytest
 
 from chessmachine.config import GeometryConfig
