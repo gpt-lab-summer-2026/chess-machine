@@ -6,6 +6,7 @@ from dataclasses import dataclass
 # The full set of actions the controller can dispatch.
 ACTIONS = {
     "set_difficulty",   # difficulty: easy|medium|hard or an elo number
+    "set_color",        # color: which color the human wants to play
     "analyze",          # question: free-text question about the position
     "engine_move",      # make and actuate the machine's own move
     "opponent_move",    # move: the human's move, to validate and actuate
@@ -28,6 +29,8 @@ INTENT_JSON_SCHEMA = {
                  "description": "the chess move in UCI or SAN, e.g. 'e2e4' or 'Nf3'"},
         "difficulty": {"type": ["string", "null"],
                        "description": "easy, medium, hard, or an Elo number"},
+        "color": {"type": ["string", "null"],
+                  "description": "the color the human wants to play: 'white' or 'black'"},
         "question": {"type": ["string", "null"],
                      "description": "the user's question about the position"},
     },
@@ -40,6 +43,7 @@ class Intent:
     action: str
     move: str | None = None
     difficulty: str | None = None
+    color: str | None = None
     question: str | None = None
     text: str | None = None            # original transcript
     raw: dict | None = None            # raw model output, for debugging
@@ -65,6 +69,7 @@ def intent_from_json(data: dict, transcript: str = "") -> Intent:
         action=action,
         move=_clean(data.get("move")),
         difficulty=_clean(data.get("difficulty")),
+        color=_clean(data.get("color")),
         question=_clean(data.get("question")),
         text=transcript,
         raw=data,

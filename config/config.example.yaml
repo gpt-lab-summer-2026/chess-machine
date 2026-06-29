@@ -16,6 +16,7 @@ audio:
     enabled: true
     aggressiveness: 2       # 0..3
     silence_ms: 800         # trailing silence that ends an utterance
+    min_speech_ms: 250      # ignore blips shorter than this (avoids phantom moves)
 
 stt:
   backend: distil_whisper   # distil_whisper | stdin (dev)

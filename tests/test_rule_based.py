@@ -13,6 +13,7 @@ def _ctx(board=None):
 @pytest.mark.parametrize("text,action", [
     ("let's start a new game", "new_game"),
     ("take that back", "undo"),
+    ("retake my turn", "undo"),
     ("I resign", "resign"),
     ("say again please", "repeat"),
     ("what can you do", "help"),
@@ -31,6 +32,13 @@ def test_difficulty_extraction():
     assert nlu.interpret("set difficulty to hard", _ctx()).difficulty == "hard"
     assert nlu.interpret("make it easy", _ctx()).difficulty == "easy"
     assert nlu.interpret("set elo to 1600", _ctx()).difficulty == "1600"
+
+
+def test_color_switch():
+    nlu = RuleBasedNLU()
+    i = nlu.interpret("let me play black", _ctx())
+    assert i.action == "set_color" and i.color == "black"
+    assert nlu.interpret("switch sides", _ctx()).action == "set_color"
 
 
 def test_looks_like_move():

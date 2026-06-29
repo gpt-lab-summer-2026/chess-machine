@@ -35,7 +35,7 @@ class RuleBasedNLU(NLU):
 
         if _has(t, "new game", "reset", "start over", "restart", "new match", "set up the board"):
             return Intent("new_game", text=transcript)
-        if _has(t, "undo", "take back", "takeback", "take that back"):
+        if _has(t, "undo", "take back", "takeback", "take that back", "retake", "redo"):
             return Intent("undo", text=transcript)
         if _has(t, "resign", "give up", "concede"):
             return Intent("resign", text=transcript)
@@ -54,6 +54,12 @@ class RuleBasedNLU(NLU):
                 if num:
                     diff = num.group(1)
             return Intent("set_difficulty", difficulty=diff, text=transcript)
+
+        m_color = re.search(r"\b(?:play|playing|be|switch to)\s+(?:as\s+)?(white|black)\b", t)
+        if m_color or _has(t, "switch sides", "swap sides", "switch colors", "swap colors"):
+            color = m_color.group(1) if m_color else (
+                "white" if "white" in t else "black" if "black" in t else None)
+            return Intent("set_color", color=color, text=transcript)
 
         if _has(t, "your move", "your turn", "you move", "your go", "make your move",
                 "make a move", "go ahead", "play your"):
@@ -74,6 +80,14 @@ class RuleBasedNLU(NLU):
         if _looks_like_move(transcript):
             return Intent("opponent_move", move=transcript, text=transcript)
 
+        # Only a bare pleasantry (the whole utterance is acknowledgement words) is
+        # chitchat; anything with other content stays "unknown" and is re-asked.
+        tokens = set(re.findall(r"[a-z']+", t))
+        if tokens and tokens <= {
+            "okay", "ok", "thanks", "thank", "you", "cool", "nice", "great",
+            "hello", "hi", "hey", "yeah", "yep", "sure",
+        }:
+            return Intent("chitchat", text=transcript)
         return Intent("unknown", text=transcript)
 
     def phrase_analysis(self, question: str, facts: PositionFacts) -> str:

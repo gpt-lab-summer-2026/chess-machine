@@ -101,6 +101,7 @@ class SlmNLU(NLU):
                 build_intent_messages(transcript, context),
                 json_mode=True, temperature=0.0, max_tokens=128,
             )
+            log.info("SLM intent raw for %r: %s", transcript, raw.strip())
             intent = intent_from_json(_extract_json(raw), transcript)
             if intent.action != "unknown":
                 return intent

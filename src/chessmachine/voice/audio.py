@@ -43,6 +43,7 @@ class AudioCapture:
         collected: list[bytes] = []
         triggered = False
         num_silent = 0
+        speech_frames = 0
 
         with sd.RawInputStream(samplerate=sr, channels=1, dtype="int16",
                                blocksize=frame_len, device=self.cfg.input_device) as stream:
@@ -57,13 +58,20 @@ class AudioCapture:
                     if is_speech:
                         triggered = True
                         collected.append(frame)
+                        speech_frames += 1
                 else:
                     collected.append(frame)
-                    num_silent = num_silent + 1 if not is_speech else 0
+                    if is_speech:
+                        speech_frames += 1
+                        num_silent = 0
+                    else:
+                        num_silent += 1
                     if num_silent >= silence_frames:
                         break
 
-        if not collected:
+        # Reject blips: a click or stray noise can trip the VAD for a frame or two.
+        # Require a minimum amount of actual speech before we bother transcribing.
+        if speech_frames * frame_ms < self.cfg.vad.min_speech_ms:
             return np.zeros(0, dtype=np.float32)
         pcm = np.frombuffer(b"".join(collected), dtype=np.int16)
         return (pcm.astype(np.float32) / 32768.0)

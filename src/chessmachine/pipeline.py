@@ -28,9 +28,19 @@ log = logging.getLogger(__name__)
 HELP_TEXT = (
     "You can tell me your move, like 'knight to f3' or 'e2 to e4'. "
     "Say 'your move' for me to play, ask 'who's winning' or 'what's the best move' "
-    "for analysis, set difficulty to easy, medium, or hard, or say 'new game'."
+    "for analysis, set difficulty to easy, medium, or hard, take a move back, "
+    "switch sides with 'let me play white', or say 'new game'."
 )
 QUIT_WORDS = {"quit", "exit", "stop", "goodbye", "q"}
+_AFFIRM_WORDS = {
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "confirm", "affirmative", "please",
+}
+
+
+def _is_affirmative(text: str) -> bool:
+    """True for a spoken 'yes' in answer to a confirmation prompt."""
+    t = re.sub(r"[^a-z ]", "", text.lower())
+    return bool(set(t.split()) & _AFFIRM_WORDS) or any(p in t for p in ("do it", "go ahead"))
 
 
 class ChessMachine:
@@ -47,6 +57,7 @@ class ChessMachine:
         self.game = GameState(machine_color=self.machine_color)
         self.difficulty = config.engine.default_difficulty
         self._last_spoken = ""
+        self._pending: str | None = None   # a destructive action awaiting confirmation
 
     # -- lifecycle ----------------------------------------------------------- #
     def start(self, home: bool = True) -> None:
@@ -95,14 +106,26 @@ class ChessMachine:
 
     # -- top-level dispatch -------------------------------------------------- #
     def handle(self, transcript: str) -> str:
+        if self._pending is not None:
+            return self._resolve_pending(transcript)
         intent = self.nlu.interpret(transcript, self._context())
-        log.info("intent=%s move=%s diff=%s", intent.action, intent.move, intent.difficulty)
+        log.info("intent=%s move=%s diff=%s color=%s",
+                 intent.action, intent.move, intent.difficulty, intent.color)
         return self._dispatch(intent)
+
+    def _resolve_pending(self, transcript: str) -> str:
+        """Resolve a yes/no answer to a pending confirmation (e.g. a new game)."""
+        pending, self._pending = self._pending, None
+        if _is_affirmative(transcript) and pending == "new_game":
+            return self._really_new_game()
+        return self._say("Okay, keeping the current game.")
 
     def _dispatch(self, intent: Intent) -> str:
         a = intent.action
         if a == "set_difficulty":
             return self._do_difficulty(intent)
+        if a == "set_color":
+            return self._do_set_color(intent)
         if a == "analyze":
             return self._do_analyze(intent)
         if a == "status":
@@ -138,6 +161,24 @@ class ChessMachine:
         self.difficulty = label
         return self._say(f"Difficulty set to {label}.")
 
+    def _do_set_color(self, intent: Intent) -> str:
+        want = (intent.color or intent.text or "").lower()
+        if "white" in want:
+            human = chess.WHITE
+        elif "black" in want:
+            human = chess.BLACK
+        else:
+            return self._say("Which colour would you like to play — white or black?")
+        self.machine_color = not human
+        self.game.machine_color = self.machine_color
+        spoken = self._say(f"Okay, you play {GameState.color_name(human)}; "
+                           f"I'll take {GameState.color_name(self.machine_color)}.")
+        # If it's now my turn (e.g. I'm White on a fresh board), make my move.
+        if (self.cfg.app.auto_reply and self.game.is_machine_turn()
+                and not self.game.is_game_over()):
+            return spoken + " " + self._do_engine_move("I'll open with")
+        return spoken
+
     def _do_analyze(self, intent: Intent) -> str:
         facts = analysis.describe_position(self.game.board, self.engine, self._last_san())
         answer = self.nlu.phrase_analysis(intent.question or intent.text or "", facts)
@@ -162,8 +203,13 @@ class ChessMachine:
         if self.game.is_game_over():
             return self._say(self.game.result_text())
         board = self.game.board
-        move_text = intent.move or intent.text or ""
-        candidates = parse_move(move_text, board)
+        # Resolve from what was actually SAID first (deterministic, and filtered
+        # against legal moves); only fall back to the SLM's guessed move if the
+        # transcript yields nothing — a small model can hallucinate the wrong
+        # square (e.g. "d5 takes e6" -> "d2e6").
+        candidates = parse_move(intent.text or "", board)
+        if not candidates and intent.move and intent.move != intent.text:
+            candidates = parse_move(intent.move, board)
         if not candidates:
             return self._say("I couldn't read that move. Could you say it again?")
         if len(candidates) > 1:
@@ -186,6 +232,14 @@ class ChessMachine:
         return spoken
 
     def _do_new_game(self) -> str:
+        # A reset discards a game in progress, so confirm before doing it.
+        if self.game.board.move_stack:
+            self._pending = "new_game"
+            return self._say("Start a new game? That clears the current one. "
+                             "Say yes to confirm.")
+        return self._really_new_game()
+
+    def _really_new_game(self) -> str:
         notes = self.choreo.setup_starting_position(self.game.board)
         self.game.reset()
         if notes:

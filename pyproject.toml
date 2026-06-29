@@ -64,7 +64,6 @@ ignore = ["B027"]
 
 # Type-checking. Pragmatic to start (not --strict); tighten in a later pass.
 [tool.mypy]
-python_version = "3.10"
 check_untyped_defs = true
 warn_redundant_casts = true
 warn_unused_ignores = true

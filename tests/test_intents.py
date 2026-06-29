@@ -37,6 +37,13 @@ def test_intent_from_json():
     assert intent_from_json({"action": "frobnicate"}, "x").action == "unknown"
     assert intent_from_json("not a dict", "x").action == "unknown"
     assert intent_from_json({"action": "engine_move", "move": "  "}, "x").move is None
+    assert intent_from_json({"action": "set_color", "color": "white"}, "x").color == "white"
+
+
+def test_set_color_routing():
+    n, c = _nlu(), _ctx()
+    i = n.interpret("can I play black instead", c)
+    assert i.action == "set_color" and i.color == "black"
 
 
 def test_phrase_analysis_grounded():

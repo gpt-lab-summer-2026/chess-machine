@@ -5,6 +5,7 @@ from chessmachine.chess_engine.engine import RandomEngine
 from chessmachine.config import Config, SlmConfig
 from chessmachine.factory import build_choreographer
 from chessmachine.nlu import create_nlu
+from chessmachine.nlu.intents import Intent
 from chessmachine.pipeline import ChessMachine
 from chessmachine.voice.stt import StdinSTT
 from chessmachine.voice.tts import TTS
@@ -86,6 +87,7 @@ def test_new_game_resets_board():
     m.handle("e4")
     m.handle("e5")
     m.handle("new game")
+    m.handle("yes")              # confirm the reset
     assert m.game.board == chess.Board()
 
 
@@ -148,8 +150,9 @@ def test_new_game_default_storage_is_honest():
     # machine must NOT claim the board is reset — it asks for a manual setup.
     m, tts = make(auto_reply=False)
     m.handle("e4"); m.handle("d5")
+    m.handle("new game")          # asks to confirm first
     tts.lines.clear()
-    m.handle("new game")
+    m.handle("yes")               # confirm -> attempts the reset
     spoken = " ".join(tts.lines).lower()
     assert "by hand" in spoken
     assert "the board is reset" not in spoken
@@ -180,3 +183,39 @@ def test_autoreply_failure_keeps_opponent_move_and_warns():
     assert [san for _, san in m.game.history] == ["e4"]   # human's move stuck, no reply
     spoken = " ".join(tts.lines).lower()
     assert "reply" in spoken and "check the board" in spoken
+
+
+def test_new_game_requires_confirmation_midgame():
+    m, tts = make(auto_reply=False)
+    m.handle("e4")
+    n = len(m.game.history)
+    tts.lines.clear()
+    m.handle("new game")                       # should ASK, not reset
+    assert len(m.game.history) == n            # nothing reset yet
+    assert any("yes" in line.lower() for line in tts.lines)
+    m.handle("no, keep playing")               # decline
+    assert len(m.game.history) == n            # still intact
+    assert m.game.history[0][1] == "e4"
+
+
+def test_set_color_switch_lets_machine_open():
+    # Machine is Black and it's the human's (White's) move; asking to play Black
+    # ourselves hands White to the machine, which then opens.
+    m, _ = make(auto_reply=True, play_as="black")
+    assert len(m.game.history) == 0
+    m.handle("let me play black")
+    assert m.machine_color == chess.WHITE
+    assert len(m.game.history) == 1            # machine opened as White
+
+
+def test_opponent_move_prefers_spoken_text_over_slm_guess():
+    # If the SLM hallucinates a wrong/illegal move but the transcript is correct,
+    # play what was actually said.
+    m, _ = make(auto_reply=False)
+
+    def fake_interpret(transcript, context):
+        return Intent(action="opponent_move", move="a1a8", text="knight to f3")
+
+    m.nlu.interpret = fake_interpret
+    m.handle("whatever whisper produced")
+    assert m.game.history and m.game.history[0][1] == "Nf3"

@@ -28,6 +28,12 @@ def test_capture_phrasings():
     assert ucis("exd5", b) == ["e4d5"]
 
 
+def test_takes_with_both_squares_named():
+    # "d5 takes e6" names source AND destination: resolve to exactly d5e6.
+    b = chess.Board("4k3/8/4p3/3P4/8/8/8/4K3 w - - 0 1")
+    assert ucis("d5 takes e6", b) == ["d5e6"]
+
+
 def test_castling():
     b = chess.Board("r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1")
     assert ucis("castle kingside", b) == ["e1g1"]

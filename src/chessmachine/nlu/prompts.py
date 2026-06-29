@@ -6,33 +6,51 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..chess_engine.analysis import PositionFacts
 
-INTENT_SYSTEM = """You control a voice-operated chess robot. Convert the user's \
-utterance into ONE JSON object and output nothing else.
+INTENT_SYSTEM = """You control a voice-operated chess robot. The user speaks; you \
+convert ONE utterance into ONE JSON object and output nothing else (no prose).
 
-Actions:
-- "opponent_move": the human states THEIR move. Put it in "move" as UCI (e2e4) \
-or SAN (Nf3, O-O). Never invent a move.
-- "engine_move": the user asks YOU (the robot) to make your move.
-- "set_difficulty": put easy, medium, hard, or an Elo number in "difficulty".
-- "analyze": a question about the position (who is winning, best move, threats, \
-evaluation). Put the question text in "question".
-- "new_game", "undo", "resign", "status", "repeat", "help", "chitchat".
+Pick exactly one "action":
+- "opponent_move": the user states THEIR own move. Put it in "move" as UCI \
+(e2e4, d5e6) or SAN (Nf3, exd5, O-O). Use the squares they actually say — \
+"d5 takes e6" is move "d5e6". Never invent or change squares.
+- "engine_move": the user explicitly asks YOU to move ("your move", "you go", \
+"make your move"). A bare "okay", "hmm", or "sure" is NOT this — that is chitchat.
+- "set_difficulty": set strength; put easy, medium, hard, or an Elo number in "difficulty".
+- "set_color": the user wants to switch sides or pick a colour ("let me play \
+black", "I'll take white", "switch sides"). Put the colour THEY want in "color".
+- "analyze": a question about the position (who's winning, best move, threats). \
+Put the question in "question".
+- "undo": take back the last move ("undo", "take that back", "retake my turn", \
+"let me redo that").
+- "new_game": start over / reset the board.
+- "resign": the user gives up.
+- "status": whose turn it is, or the score.
+- "repeat": say the last thing again.
+- "help": what can you do.
+- "chitchat": anything else, including bare acknowledgements ("okay", "thanks", "cool").
 
-Only fill "move", "difficulty", or "question" when relevant; otherwise omit them.
+Fill only the slot for the chosen action ("move", "difficulty", "color", or \
+"question"); omit the others.
 Context: {context_line}"""
 
-# Few-shot pairs steer a small model toward strict, correct JSON.
+# Few-shot pairs steer a small model toward strict, correct JSON. They cover the
+# tricky cases: captures, undo phrasings, colour switches, and fillers.
 INTENT_EXAMPLES = [
     ("knight to f3", '{"action": "opponent_move", "move": "Nf3"}'),
     ("I'll play e4", '{"action": "opponent_move", "move": "e2e4"}'),
+    ("d5 takes e6", '{"action": "opponent_move", "move": "d5e6"}'),
     ("castle kingside", '{"action": "opponent_move", "move": "O-O"}'),
-    ("okay, your move", '{"action": "engine_move"}'),
+    ("your move", '{"action": "engine_move"}'),
+    ("okay", '{"action": "chitchat"}'),
+    ("retake my turn", '{"action": "undo"}'),
+    ("take that back", '{"action": "undo"}'),
+    ("can I play black instead", '{"action": "set_color", "color": "black"}'),
     ("make it harder", '{"action": "set_difficulty", "difficulty": "hard"}'),
     ("set elo to 1600", '{"action": "set_difficulty", "difficulty": "1600"}'),
     ("who is winning right now?", '{"action": "analyze", "question": "who is winning"}'),
     ("what's the best move here", '{"action": "analyze", "question": "best move"}'),
     ("let's start a new game", '{"action": "new_game"}'),
-    ("take that back", '{"action": "undo"}'),
+    ("whose turn is it", '{"action": "status"}'),
 ]
 
 PHRASE_SYSTEM = """You are a friendly chess opponent speaking out loud. Answer the \
