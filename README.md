@@ -70,6 +70,13 @@ python -m chessmachine --config config/config.yaml
 
 Flash the ESP32 first — see **[firmware/esp32_chess/](firmware/esp32_chess/)**.
 
+## Running on a Windows PC (real voice, no motors)
+
+To run the full mic → whisper → SLM → Stockfish → Kokoro → speaker loop on a
+desktop with motion mocked (no ESP32), see **[docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md)**
+— it covers the voice deps (incl. the `webrtcvad` wheel), a Stockfish binary,
+GPU/CPU `llama-cpp-python`, model downloads (`scripts/fetch_models.ps1`), and config.
+
 ## Voice commands
 
 | You say | Action |
