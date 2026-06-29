@@ -79,17 +79,37 @@ python -m chessmachine --config config/config.yaml
 
 ## 7. Autostart (optional)
 
+Run the SLM as its own service so systemd supervises it (don't background a
+process from `ExecStartPre` — systemd may reap it).
+
+`/etc/systemd/system/llama-server.service`:
+
+```ini
+[Unit]
+Description=llama-server (chess SLM)
+After=network.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/chess-machine
+ExecStart=/usr/local/bin/llama-server -m models/slm/model.gguf -c 4096 --port 8080
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
 `/etc/systemd/system/chess-machine.service`:
 
 ```ini
 [Unit]
 Description=Chess Machine
-After=network.target sound.target
+After=network.target sound.target llama-server.service
+Wants=llama-server.service
 
 [Service]
 User=pi
 WorkingDirectory=/home/pi/chess-machine
-ExecStartPre=/bin/sh -c 'llama-server -m models/slm/model.gguf -c 4096 --port 8080 &'
 ExecStart=/home/pi/chess-machine/.venv/bin/python -m chessmachine --config config/config.yaml
 Restart=on-failure
 
@@ -98,7 +118,7 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable --now chess-machine
+sudo systemctl enable --now llama-server chess-machine
 ```
 
 ## Performance notes

@@ -44,3 +44,12 @@ def test_unknown_key_rejected(tmp_path):
 def test_missing_file():
     with pytest.raises(FileNotFoundError):
         load_config("does/not/exist.yaml")
+
+
+def test_scalar_where_section_expected_rejected(tmp_path):
+    # A scalar where a whole section is expected must error loudly, not silently
+    # replace the dataclass.
+    p = tmp_path / "c.yaml"
+    p.write_text("app: 5\n", encoding="utf-8")
+    with pytest.raises(TypeError):
+        load_config(p)

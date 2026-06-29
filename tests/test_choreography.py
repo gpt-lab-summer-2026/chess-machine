@@ -146,3 +146,18 @@ def test_reset_pulls_captured_pieces_back_from_the_graveyard(rig):
     assert gy.occupied() == 0                  # captured pawn returned to d7
     # white pawn d5 -> e2, black pawn graveyard -> d7 = 2 transfers = 4 moves
     assert len(ctl.moves()) == 4
+
+
+def test_capture_with_full_storage_aborts_cleanly(rig):
+    # Once storage is full, a capture must abort without touching the board so
+    # the logical and physical positions can't drift apart.
+    ctl, gy, ch, geo = rig
+    for _ in range(gy.capacity):
+        gy.store(chess.Piece(chess.PAWN, chess.WHITE))
+    assert gy.free() == 0
+    b = chess.Board(); b.push_san("e4"); b.push_san("d5")
+    ctl.reset_log()
+    r = ch.execute_move(b, chess.Move.from_uci("e4d5"))
+    assert r.aborted and r.transfers == 0
+    assert ctl.moves() == []                  # nothing actuated
+    assert r.notes and "storage" in r.notes[0].lower()

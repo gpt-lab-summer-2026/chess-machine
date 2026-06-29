@@ -158,3 +158,47 @@ def test_undo_takes_back_full_move_pair():
     assert len(m.game.history) == 0
     assert m.game.board == chess.Board()
     assert m.game.turn() == chess.WHITE   # user (White) is back on move
+
+
+def test_engine_move_refuses_when_not_machine_turn():
+    # Machine plays black; at the start it's the human's (white's) move.
+    m, tts = make(auto_reply=False, play_as="black")
+    before = len(m.game.history)
+    m.handle("your move")
+    assert len(m.game.history) == before      # didn't move out of turn
+    assert any("your move" in l.lower() for l in tts.lines)
+
+
+def test_resign_ends_game_and_blocks_further_moves():
+    m, tts = make(auto_reply=False)
+    m.handle("e4")
+    m.handle("I resign")
+    assert m.game.is_game_over()
+    assert any("resign" in l.lower() for l in tts.lines)
+    n = len(m.game.history)
+    m.handle("e5")                            # game is over -> not applied
+    assert len(m.game.history) == n
+
+
+def test_capture_aborts_cleanly_when_storage_full():
+    # Filling storage must not crash a capture or desync the board: the move is
+    # simply refused with a spoken prompt to clear the captured pieces.
+    m, tts = make(auto_reply=False)
+    gy = m.choreo.graveyard
+    for _ in range(gy.capacity):
+        gy.store(chess.Piece(chess.PAWN, chess.WHITE))
+    m.handle("e4"); m.handle("d5")
+    n_before = len(m.game.history)
+    tts.lines.clear()
+    m.handle("exd5")
+    assert len(m.game.history) == n_before    # capture NOT applied (no desync)
+    assert any("storage" in l.lower() for l in tts.lines)
+
+
+def test_new_game_clears_stale_storage():
+    m, _ = make(auto_reply=False)
+    gy = m.choreo.graveyard
+    gy.store(chess.Piece(chess.PAWN, chess.WHITE))
+    assert gy.occupied() == 1
+    m.handle("new game")
+    assert gy.occupied() == 0

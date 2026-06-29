@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 
-from .config import load_config, Config
+import yaml
+
+from .config import load_config, Config, preset_from_elo
 from . import factory
 from .pipeline import ChessMachine
 
@@ -35,7 +38,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--engine", choices=["stockfish", "random"], help="override engine backend")
     p.add_argument("--slm", choices=["llama_cpp", "rule_based"], help="override SLM backend")
     p.add_argument("--play-as", choices=["white", "black"], help="color the machine plays")
-    p.add_argument("--difficulty", help="starting difficulty preset (easy/medium/hard)")
+    p.add_argument("--difficulty", help="starting difficulty: a preset (easy/medium/hard) or an Elo number, e.g. 1600")
     p.add_argument("--once", metavar="TEXT", help="handle one utterance then exit")
     p.add_argument("--no-home", action="store_true", help="skip homing on startup")
     p.add_argument("--log-level", default=None, help="DEBUG/INFO/WARNING/ERROR")
@@ -62,17 +65,28 @@ def _apply_overrides(cfg: Config, args: argparse.Namespace) -> Config:
     if args.play_as:
         cfg.app.play_as = args.play_as
     if args.difficulty:
-        if args.difficulty in cfg.engine.presets:
-            cfg.engine.default_difficulty = args.difficulty
+        d = args.difficulty.strip().lower()
+        m = re.fullmatch(r"\d{3,4}", d)
+        if d in cfg.engine.presets:
+            cfg.engine.default_difficulty = d
+        elif m:
+            # An ad-hoc Elo: synthesize a preset and select it (matches the
+            # "set elo to 1600" voice command).
+            cfg.engine.presets[d] = preset_from_elo(int(d))
+            cfg.engine.default_difficulty = d
         else:
-            logging.warning("Unknown difficulty preset %r; keeping %s",
+            logging.warning("Unknown difficulty %r; keeping %s",
                             args.difficulty, cfg.engine.default_difficulty)
     return cfg
 
 
 def main(argv=None) -> int:
     args = _parse_args(argv)
-    cfg = load_config(args.config) if args.config else Config()
+    try:
+        cfg = load_config(args.config) if args.config else Config()
+    except (FileNotFoundError, KeyError, TypeError, ValueError, yaml.YAMLError) as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 2
     cfg = _apply_overrides(cfg, args)
 
     logging.basicConfig(

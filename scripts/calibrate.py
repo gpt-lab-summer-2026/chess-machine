@@ -86,7 +86,7 @@ def main() -> int:
                 marks[sq] = (x, z)
                 print(f"  marked {sq} = ({x:.2f}, {z:.2f})")
             elif cmd == "calc":
-                _print_geometry(marks)
+                _print_geometry(marks, cfg.motion.geometry)
             else:
                 print(f"  ? unknown command: {cmd}")
         except Exception as exc:  # noqa: BLE001
@@ -96,20 +96,28 @@ def main() -> int:
     return 0
 
 
-def _print_geometry(marks: dict[str, tuple[float, float]]) -> None:
+def _print_geometry(marks: dict[str, tuple[float, float]], geo) -> None:
     if "a1" not in marks or "h8" not in marks:
         print("  need both 'mark a1' and 'mark h8' first")
         return
     (ax, az), (hx, hz) = marks["a1"], marks["h8"]
     pitch_x = abs(hx - ax) / 7.0
     pitch_z = abs(hz - az) / 7.0
+    # a1->h8 advances 7 files AND 7 ranks. Which physical delta is "files"
+    # depends on the configured axis mapping, and so does each invert flag.
+    if geo.file_axis == "x":
+        invert_file, invert_rank = hx < ax, hz < az
+    else:  # files run along z, ranks along x
+        invert_file, invert_rank = hz < az, hx < ax
     print("\n# --- paste into config.yaml under motion.geometry ---")
     print(f"    origin_x_mm: {ax:.2f}")
     print(f"    origin_z_mm: {az:.2f}")
     print(f"    square_pitch_mm: {(pitch_x + pitch_z) / 2:.3f}   "
           f"# x-pitch={pitch_x:.3f} z-pitch={pitch_z:.3f}")
-    print(f"    invert_file: {hx < ax}")
-    print(f"    invert_rank: {hz < az}")
+    print(f"    file_axis: {geo.file_axis}")
+    print(f"    rank_axis: {geo.rank_axis}")
+    print(f"    invert_file: {invert_file}")
+    print(f"    invert_rank: {invert_rank}")
     print("# ----------------------------------------------------\n")
 
 

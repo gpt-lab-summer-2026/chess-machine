@@ -82,6 +82,23 @@ make illegal or wrong chess decisions.
 - Unreadable move → "say that again"; ambiguous move → "did you mean X or Y?".
 - Promotion with no spare piece, or a too-small graveyard for reset → the
   machine does what it can and speaks the manual step needed.
+- Storage full on a capture → the move is **refused without touching the board**
+  (so the logical and physical positions can't drift apart) and the machine asks
+  you to clear the captured pieces. The reference 16-slot graveyard fills after 16
+  captures; see [DESIGN.md §4.1](DESIGN.md).
+- Out-of-turn `engine_move` ("your move" when it's *your* turn) → declined, not
+  played for the wrong colour.
+
+### The actuation/state-sync contract
+
+`pipeline` is the single owner of game state, and it keeps the logical board in
+lockstep with the physical one: `_play_move` calls `Choreographer.execute_move`
+*before* `GameState.push`, and only pushes if actuation succeeded.
+`execute_move` therefore does its feasibility checks up front and returns an
+`ExecutionReport` — `aborted=True` (nothing moved; caller must not apply the
+move) plus human-readable `notes` for any manual step — rather than raising
+mid-sequence. A new `MotionController` transport need only honour the same
+"complete the op or fail before moving" expectation; nothing upstream changes.
 
 ## Extending it
 

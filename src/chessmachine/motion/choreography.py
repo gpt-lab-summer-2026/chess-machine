@@ -30,6 +30,7 @@ class ExecutionReport:
     description: str = ""
     notes: list[str] = field(default_factory=list)   # manual-intervention prompts
     transfers: int = 0                                # pick+place pairs performed
+    aborted: bool = False                             # nothing actuated; caller must not apply the move
 
 
 class Choreographer:
@@ -111,6 +112,17 @@ class Choreographer:
         """
         cls = classify_move(board_before, move)
         report = ExecutionReport(kind=cls.kind)
+
+        # Pre-flight: a capture needs a free storage slot. If none is free, refuse
+        # the move without touching the board (a no-op complete()), so the logical
+        # and physical positions can't drift apart.
+        if cls.is_capture and cls.captured_piece is not None and self.graveyard.free() == 0:
+            report.aborted = True
+            report.notes.append(
+                "Storage is full — please clear the captured pieces off the board "
+                "before I can take again."
+            )
+            return (lambda: report), report
 
         # Clear a captured piece to storage first (normal capture or en passant).
         # Castling is never a capture, so this is skipped for it.
@@ -283,4 +295,7 @@ class Choreographer:
 
         if exhausted:
             notes.append("I ran out of storage mid-reset; please finish by hand.")
+        # A new game starts from a clean slate: drop any captured-piece bookkeeping
+        # (anything we couldn't place is now the human's to set up).
+        self.graveyard.reset()
         return notes
