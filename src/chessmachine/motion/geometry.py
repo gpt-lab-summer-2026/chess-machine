@@ -1,11 +1,14 @@
-"""Map chess squares (and the off-board graveyard) to physical (X,Z) gantry mm.
+"""Map chess squares (and the off-board graveyard) to planar (X,Z) millimetres.
 
-Origin is the center of square a1. Files (a..h) and ranks (1..8) are assigned to
-the two physical axes via config, with optional inversion, so the same code
-handles any mounting orientation of the board under the gantry.
+The frame's origin is the crane pivot; the transport converts each (x,z) to
+polar (r, theta) for the rotary base + radial railcart. The board itself is a
+flat grid, so squares map to a plane exactly as before: origin is the center of
+a1, files (a..h) and ranks (1..8) run along the two planar axes (config, with
+optional inversion) so the board can sit at any orientation in the sector.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import chess
@@ -32,7 +35,7 @@ class BoardGeometry:
         self.cfg = cfg
 
     def square_to_point(self, square: int) -> Point:
-        """python-chess square index (a1=0 .. h8=63) -> gantry Point."""
+        """python-chess square index (a1=0 .. h8=63) -> planar Point (mm)."""
         file_idx = chess.square_file(square)   # 0..7  (a..h)
         rank_idx = chess.square_rank(square)   # 0..7  (1..8)
         if self.cfg.invert_file:
@@ -52,11 +55,21 @@ class BoardGeometry:
         return self.square_to_point(chess.parse_square(name))
 
     def graveyard_slots(self) -> list[Point]:
-        """Off-board storage positions, filled column-major."""
+        """Off-board storage: two symmetric arcs in the leftover sector.
+
+        Slots sit at `graveyard_radius_mm` (beyond the board's far corners, so
+        the whole arc clears the board), spread between `graveyard_inner_deg` and
+        `graveyard_outer_deg` on each side of the bisector. Filled
+        positive-angle side first, inner angle first.
+        """
+        r = self.cfg.graveyard_radius_mm
+        n = self.cfg.graveyard_slots_per_side
+        inner = self.cfg.graveyard_inner_deg
+        outer = self.cfg.graveyard_outer_deg
         slots: list[Point] = []
-        for col in range(self.cfg.graveyard_columns):
-            x = self.cfg.graveyard_x_mm + col * self.cfg.graveyard_x_pitch_mm
-            for row in range(self.cfg.graveyard_slots_per_column):
-                z = self.cfg.graveyard_z_start_mm + row * self.cfg.graveyard_z_pitch_mm
-                slots.append(Point(x, z))
+        for sign in (1.0, -1.0):
+            for k in range(n):
+                frac = k / (n - 1) if n > 1 else 0.0
+                theta = math.radians(sign * (inner + (outer - inner) * frac))
+                slots.append(Point(r * math.cos(theta), r * math.sin(theta)))
         return slots

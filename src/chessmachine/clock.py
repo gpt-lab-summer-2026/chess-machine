@@ -1,7 +1,7 @@
 """A one-sided match clock.
 
 It charges the *human* only — for the time they spend thinking before their
-prompt is ready. The machine's own work (speech recognition, the SLM, gantry
+prompt is ready. The machine's own work (speech recognition, the SLM, crane
 actuation, the spoken explanation) happens off this clock by design: that
 processing time is exactly what gives the player a moment to plan their reply,
 so it must not count against them. See docs / the move-commentary design notes.

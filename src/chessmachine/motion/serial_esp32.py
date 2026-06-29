@@ -4,19 +4,24 @@ Speaks the line protocol implemented by firmware/esp32_chess. Every command
 blocks until the controller acknowledges with `OK` (or raises on `ERR`/timeout),
 so the host can sequence moves without tracking motor state itself.
 
+This is also where the planar (x,z) workspace is converted to the crane's polar
+axes: `move_xz` sends `r = hypot(x,z)` and `theta = atan2(z,x)` (degrees) in the
+pivot frame; the rotary base + radial railcart realize them.
+
 Protocol (see docs/PROTOCOL.md):
     ->  PING                          <-  OK PONG
     ->  HOME                          <-  OK HOMED
-    ->  MOVE X<mm> Z<mm> [F<mm/min>]  <-  OK
+    ->  MOVE R<mm> A<deg> [F<mm/min>] <-  OK
     ->  PULLEY H<mm> [F<mm/min>]      <-  OK
     ->  MAG ON|OFF                    <-  OK
-    ->  STATUS                        <-  OK X<f> Z<f> H<f> MAG<0|1> ENDX<0|1> ENDZ<0|1>
+    ->  STATUS                        <-  OK R<f> A<f> H<f> MAG<0|1> ENDR<0|1> ENDA<0|1>
     ->  ESTOP                         <-  OK ESTOP
 Lines beginning with '#' (debug) or 'EVT' (async event) are logged and ignored.
 """
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import Optional
 
@@ -88,7 +93,10 @@ class SerialMotion(MotionController):
         self._command("HOME", expect="HOMED", timeout=self.cfg.home_timeout_s)
 
     def move_xz(self, x_mm: float, z_mm: float, feed: Optional[int] = None) -> None:
-        self._command(f"MOVE X{x_mm:.2f} Z{z_mm:.2f}{self._feed(feed)}")
+        # Planar (x,z) in the pivot frame -> polar (radial mm, rotary deg).
+        r = math.hypot(x_mm, z_mm)
+        a = math.degrees(math.atan2(z_mm, x_mm))
+        self._command(f"MOVE R{r:.2f} A{a:.2f}{self._feed(feed)}")
 
     def set_pulley(self, height_mm: float, feed: Optional[int] = None) -> None:
         self._command(f"PULLEY H{height_mm:.2f}{self._feed(feed)}")
@@ -108,18 +116,18 @@ class SerialMotion(MotionController):
         out: dict = {}
         for tok in payload.split():
             try:
-                if tok.startswith("X"):
-                    out["x"] = float(tok[1:])
-                elif tok.startswith("Z"):
-                    out["z"] = float(tok[1:])
-                elif tok.startswith("H"):
-                    out["height"] = float(tok[1:])
+                if tok.startswith("ENDR"):
+                    out["endstop_r"] = tok[4:] == "1"
+                elif tok.startswith("ENDA"):
+                    out["endstop_a"] = tok[4:] == "1"
                 elif tok.startswith("MAG"):
                     out["magnet"] = tok[3:] == "1"
-                elif tok.startswith("ENDX"):
-                    out["endstop_x"] = tok[4:] == "1"
-                elif tok.startswith("ENDZ"):
-                    out["endstop_z"] = tok[4:] == "1"
+                elif tok.startswith("R"):
+                    out["r"] = float(tok[1:])
+                elif tok.startswith("A"):
+                    out["a"] = float(tok[1:])
+                elif tok.startswith("H"):
+                    out["height"] = float(tok[1:])
             except ValueError:
                 continue
         return out

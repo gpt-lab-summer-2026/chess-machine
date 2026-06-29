@@ -15,7 +15,7 @@ from typing import Optional
 
 from ..config import SlmConfig
 from .base import NLU
-from .intents import intent_from_json, Intent
+from .intents import intents_from_json, Intent
 from .prompts import build_intent_messages, build_analysis_messages, build_move_comment_messages
 
 log = logging.getLogger(__name__)
@@ -92,16 +92,17 @@ class SlmNLU(NLU):
         self.client = client
         self.fallback = fallback
 
-    def interpret(self, transcript: str, context: dict) -> Intent:
+    def interpret(self, transcript: str, context: dict) -> list[Intent]:
         try:
             raw = self.client.chat(
                 build_intent_messages(transcript, context),
-                json_mode=True, temperature=0.0, max_tokens=128,
+                json_mode=True, temperature=0.0, max_tokens=192,
             )
-            intent = intent_from_json(_extract_json(raw), transcript)
-            if intent.action != "unknown":
-                return intent
-            log.info("SLM returned 'unknown'; trying rule-based fallback")
+            intents = intents_from_json(_extract_json(raw), transcript)
+            known = [i for i in intents if i.action != "unknown"]
+            if known:
+                return known
+            log.info("SLM returned no known action; trying rule-based fallback")
         except Exception as exc:  # noqa: BLE001 - any failure should degrade gracefully
             log.warning("SLM interpret failed (%s); using rule-based fallback", exc)
         return self.fallback.interpret(transcript, context)

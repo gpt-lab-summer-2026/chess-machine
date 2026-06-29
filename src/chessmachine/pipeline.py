@@ -30,7 +30,8 @@ log = logging.getLogger(__name__)
 HELP_TEXT = (
     "You can tell me your move, like 'knight to f3' or 'e2 to e4'. "
     "Say 'your move' for me to play, ask 'who's winning' or 'what's the best move' "
-    "for analysis, set difficulty to easy, medium, or hard, or say 'new game'."
+    "for analysis, set difficulty to easy, medium, or hard, say 'switch sides' or "
+    "'I'll play black' to change colors, or say 'new game'."
 )
 QUIT_WORDS = {"quit", "exit", "stop", "goodbye", "q"}
 
@@ -94,14 +95,25 @@ class ChessMachine:
 
     # -- top-level dispatch -------------------------------------------------- #
     def handle(self, transcript: str) -> str:
-        intent = self.nlu.interpret(transcript, self._context())
-        log.info("intent=%s move=%s diff=%s", intent.action, intent.move, intent.difficulty)
-        return self._dispatch(intent)
+        """Dispatch an utterance. The NLU turns it into one or more structured
+        intents (the SLM does the language work, incl. splitting a compound
+        request like "give me black and set difficulty to hard"); we just run
+        each in order and join the spoken replies."""
+        replies = []
+        for intent in self.nlu.interpret(transcript, self._context()):
+            log.info("intent=%s move=%s diff=%s color=%s", intent.action,
+                     intent.move, intent.difficulty, intent.color)
+            reply = self._dispatch(intent)
+            if reply:
+                replies.append(reply)
+        return " ".join(replies)
 
     def _dispatch(self, intent: Intent) -> str:
         a = intent.action
         if a == "set_difficulty":
             return self._do_difficulty(intent)
+        if a == "set_side":
+            return self._do_set_side(intent)
         if a == "analyze":
             return self._do_analyze(intent)
         if a == "status":
@@ -136,6 +148,29 @@ class ChessMachine:
         self.difficulty = label
         return self._say(f"Difficulty set to {label}.")
 
+    def _do_set_side(self, intent: Intent) -> str:
+        """Change which color the machine plays, keeping the current position.
+
+        If the switch puts the machine on move, it plays immediately (auto-reply),
+        so "you take white from here" hands the turn straight over.
+        """
+        color = (intent.color or "").strip().lower()
+        if color in ("white", "black"):
+            new_color = chess.WHITE if color == "white" else chess.BLACK
+        else:
+            new_color = not self.machine_color    # no/blank color => swap sides
+        if new_color == self.machine_color:
+            return self._say(f"I'm already playing {GameState.color_name(new_color)}.")
+
+        self.machine_color = new_color
+        self.game.machine_color = new_color
+        spoken = self._say(f"Okay, I'll play {GameState.color_name(new_color)} now. "
+                           f"You're {GameState.color_name(not new_color)}.")
+        if (self.cfg.app.auto_reply and not self.game.is_game_over()
+                and self.game.is_machine_turn()):
+            return spoken + " " + self._do_engine_move("My move:")
+        return spoken
+
     def _do_analyze(self, intent: Intent) -> str:
         facts = analysis.describe_position(self.game.board, self.engine, self._last_san())
         answer = self.nlu.phrase_analysis(intent.question or intent.text or "", facts)
@@ -159,8 +194,17 @@ class ChessMachine:
 
     def _do_opponent_move(self, intent: Intent) -> str:
         board = self.game.board
-        move_text = intent.move or intent.text or ""
-        candidates = parse_move(move_text, board)
+        # Resolve from the user's literal words first; the SLM's `move` field is
+        # only a fallback. A small model sometimes substitutes a different (or
+        # wrong-color) move — especially when the user plays Black and the few-shot
+        # examples are White moves — and that bogus move would otherwise be played
+        # or rejected, swallowing the user's real move (and the auto-reply with it).
+        candidates: list[chess.Move] = []
+        for text in (intent.text, intent.move):
+            if text:
+                candidates = parse_move(text, board)
+                if candidates:
+                    break
         if not candidates:
             return self._say("move not readable. say it again please")
         if len(candidates) > 1:
@@ -186,23 +230,34 @@ class ChessMachine:
         return spoken
 
     def _do_undo(self) -> str:
-        move = self.game.undo()
-        if move is None:
+        first = self.game.undo()
+        if first is None:
             return self._say("There's no move to take back.")
-        report = self.choreo.reverse_move(self.game.board, move)
-        text = "Move taken back."
-        if report.notes:
-            text += " " + " ".join(report.notes)
+        notes = list(self.choreo.reverse_move(self.game.board, first).notes)
+        count = 1
+        # With auto-reply, the move just popped was the machine's reply, so it is
+        # now the machine's turn again — take back the user's move too, handing
+        # the turn back to them. (If the popped move was the user's own, it is
+        # already their turn and we stop at one.)
+        if (self.cfg.app.auto_reply and self.game.board.move_stack
+                and self.game.is_machine_turn()):
+            second = self.game.undo()
+            if second is not None:
+                notes += self.choreo.reverse_move(self.game.board, second).notes
+                count += 1
+        text = "Move taken back." if count == 1 else "Moves taken back."
+        if notes:
+            text += " " + " ".join(notes)
         return self._say(text)
 
     # -- helpers ------------------------------------------------------------- #
     def _play_move(self, move: chess.Move, prefix: str) -> str:
         """Actuate, narrate, and speak a move. With concurrent actuation the
-        gantry carries the piece while we compute and speak the explanation —
+        crane carries the piece while we compute and speak the explanation —
         the captured piece (if any) is always cleared first. Speaks internally."""
         board_before = self.game.board.copy()
         # Promotions can prompt for a manual piece swap mid-actuation, so their
-        # notes aren't known until the gantry finishes — run those synchronously.
+        # notes aren't known until the crane finishes — run those synchronously.
         concurrent = self.cfg.app.concurrent_actuation and move.promotion is None
         motion: Optional[threading.Thread] = None
         if concurrent:
@@ -221,7 +276,7 @@ class ChessMachine:
         if self.game.is_game_over():
             text += " " + self.game.result_text()
 
-        self._say(text)                 # spoken while the gantry is still moving
+        self._say(text)                 # spoken while the crane is still moving
         if motion is not None:
             motion.join()               # don't begin the next move until actuation is done
         return text
@@ -234,7 +289,7 @@ class ChessMachine:
             except Exception:  # noqa: BLE001 - surface, but never crash the turn
                 log.exception("Actuation failed during concurrent move")
 
-        thread = threading.Thread(target=run, name="gantry", daemon=True)
+        thread = threading.Thread(target=run, name="crane", daemon=True)
         thread.start()
         return thread
 

@@ -2,13 +2,21 @@
 from __future__ import annotations
 
 INTENT_SYSTEM = """You control a voice-operated chess robot. Convert the user's \
-utterance into ONE JSON object and output nothing else.
+utterance into JSON of the form {"actions": [ ... ]} and output nothing else. \
+Put ONE object per thing the user asked for, in order — usually one, but a \
+compound request like "give me black and make it harder" becomes two.
 
-Actions:
-- "opponent_move": the human states THEIR move. Put it in "move" as UCI (e2e4) \
-or SAN (Nf3, O-O). Never invent a move.
+Actions (each object has an "action" plus only the fields it needs):
+- "opponent_move": the human states THEIR move. Copy EXACTLY what they said into \
+"move" as UCI (e2e4) or SAN (Nf3, O-O) — do not substitute, "correct", or invent a \
+different move, and remember the human may be playing black (e.g. they say "e5", \
+"c5", "knight f6").
 - "engine_move": the user asks YOU (the robot) to make your move.
 - "set_difficulty": put easy, medium, hard, or an Elo number in "difficulty".
+- "set_side": the user chooses who plays which color, mid-game. Put the color \
+YOU (the robot) will play in "color" as "white" or "black"; for "switch sides" \
+omit "color". Remember: if the user wants a color for THEMSELVES, you take the \
+other one.
 - "analyze": a question about the position (who is winning, best move, threats, \
 evaluation). Put the question text in "question".
 - "new_game", "undo", "resign", "status", "repeat", "help", "chitchat".
@@ -18,16 +26,24 @@ Context: {context_line}"""
 
 # Few-shot pairs steer a small model toward strict, correct JSON.
 INTENT_EXAMPLES = [
-    ("knight to f3", '{"action": "opponent_move", "move": "Nf3"}'),
-    ("I'll play e4", '{"action": "opponent_move", "move": "e2e4"}'),
-    ("castle kingside", '{"action": "opponent_move", "move": "O-O"}'),
-    ("okay, your move", '{"action": "engine_move"}'),
-    ("make it harder", '{"action": "set_difficulty", "difficulty": "hard"}'),
-    ("set elo to 1600", '{"action": "set_difficulty", "difficulty": "1600"}'),
-    ("who is winning right now?", '{"action": "analyze", "question": "who is winning"}'),
-    ("what's the best move here", '{"action": "analyze", "question": "best move"}'),
-    ("let's start a new game", '{"action": "new_game"}'),
-    ("take that back", '{"action": "undo"}'),
+    ("knight to f3", '{"actions": [{"action": "opponent_move", "move": "Nf3"}]}'),
+    ("I'll play e4", '{"actions": [{"action": "opponent_move", "move": "e2e4"}]}'),
+    ("e5", '{"actions": [{"action": "opponent_move", "move": "e5"}]}'),            # black replies
+    ("knight to f6", '{"actions": [{"action": "opponent_move", "move": "Nf6"}]}'),  # black, verbatim
+    ("castle kingside", '{"actions": [{"action": "opponent_move", "move": "O-O"}]}'),
+    ("okay, your move", '{"actions": [{"action": "engine_move"}]}'),
+    ("make it harder", '{"actions": [{"action": "set_difficulty", "difficulty": "hard"}]}'),
+    ("set elo to 1600", '{"actions": [{"action": "set_difficulty", "difficulty": "1600"}]}'),
+    ("let me play black", '{"actions": [{"action": "set_side", "color": "white"}]}'),
+    ("you take white from here", '{"actions": [{"action": "set_side", "color": "white"}]}'),
+    ("switch sides", '{"actions": [{"action": "set_side"}]}'),
+    ("give me black and set difficulty to hard",
+     '{"actions": [{"action": "set_side", "color": "white"}, '
+     '{"action": "set_difficulty", "difficulty": "hard"}]}'),
+    ("who is winning right now?", '{"actions": [{"action": "analyze", "question": "who is winning"}]}'),
+    ("what's the best move here", '{"actions": [{"action": "analyze", "question": "best move"}]}'),
+    ("let's start a new game", '{"actions": [{"action": "new_game"}]}'),
+    ("take that back", '{"actions": [{"action": "undo"}]}'),
 ]
 
 PHRASE_SYSTEM = """You are a friendly chess opponent speaking out loud. Answer the \
@@ -40,7 +56,9 @@ Facts:
 
 
 def _context_line(context: dict) -> str:
-    return (f"machine plays {context.get('machine_color', '?')}, "
+    machine = context.get("machine_color", "?")
+    user = {"white": "black", "black": "white"}.get(machine, "?")
+    return (f"you (the robot) play {machine}, the human plays {user}, "
             f"{context.get('turn', '?')} to move, "
             f"difficulty {context.get('difficulty', '?')}.")
 

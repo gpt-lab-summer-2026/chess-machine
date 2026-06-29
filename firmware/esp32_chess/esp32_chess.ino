@@ -1,19 +1,22 @@
 /*
  * esp32_chess — motor controller firmware for the voice-controlled chess board.
  *
- * Drives three stepper axes (X, Z gantry + pulley winch) and one electromagnet,
- * and speaks the line protocol the host (chessmachine.motion.serial_esp32) expects:
+ * Drives a polar crane: a ROTARY base (theta) + a RADIAL railcart along the arm
+ * (r), plus a pulley winch and one electromagnet. It speaks the line protocol
+ * the host (chessmachine.motion.serial_esp32) expects:
  *
  *   PING                          -> OK PONG
  *   HOME                          -> OK HOMED
- *   MOVE X<mm> Z<mm> [F<mm/min>]  -> OK
+ *   MOVE R<mm> A<deg> [F<mm/min>] -> OK
  *   PULLEY H<mm> [F<mm/min>]      -> OK
  *   MAG ON|OFF                    -> OK
- *   STATUS                        -> OK X<f> Z<f> H<f> MAG<0|1> ENDX<0|1> ENDZ<0|1>
+ *   STATUS                        -> OK R<f> A<f> H<f> MAG<0|1> ENDR<0|1> ENDA<0|1>
  *   ESTOP                         -> OK ESTOP
  *
- * Every motion command BLOCKS until the move finishes, then replies OK, so the
- * host never has to track motor state. Lines starting with '#' are debug logs.
+ * The host does the Cartesian->polar conversion, so this firmware only positions
+ * the radial axis (mm from the pivot) and the rotary axis (degrees in the pivot
+ * frame). Every motion command BLOCKS until the move finishes, then replies OK,
+ * so the host never has to track motor state. Lines starting with '#' are debug.
  *
  * Requires the AccelStepper library (Library Manager: "AccelStepper").
  * Board: any ESP32 dev module. EDIT the pin + mechanics section for your wiring.
@@ -21,39 +24,46 @@
 #include <AccelStepper.h>
 
 // ======================= EDIT: pins ==========================================
-#define X_STEP_PIN     26
-#define X_DIR_PIN      16
-#define Z_STEP_PIN     25
-#define Z_DIR_PIN      27
+#define R_STEP_PIN     26
+#define R_DIR_PIN      16
+#define A_STEP_PIN     25
+#define A_DIR_PIN      27
 #define P_STEP_PIN     33
 #define P_DIR_PIN      32
 #define MOTOR_ENABLE   5     // shared driver enable, active LOW
-#define X_ENDSTOP_PIN  13    // INPUT_PULLUP, LOW = pressed
-#define Z_ENDSTOP_PIN  14
+#define R_ENDSTOP_PIN  13    // INPUT_PULLUP, LOW = pressed (radial, inner end)
+#define A_ENDSTOP_PIN  14    // rotary home switch
 #define P_TOP_ENDSTOP  15    // pulley fully-retracted switch
 #define MAGNET_PIN     23    // MOSFET gate / relay (HIGH = energized)
 
 // ==================== EDIT: mechanics ========================================
-const float X_STEPS_PER_MM = 80.0;   // depends on belt/leadscrew + microstepping
-const float Z_STEPS_PER_MM = 80.0;
-const float P_STEPS_PER_MM = 80.0;
-const bool  X_DIR_INVERT   = false;
-const bool  Z_DIR_INVERT   = false;
-const bool  P_DIR_INVERT   = false;
-const int   X_HOME_DIR     = -1;     // sign of travel toward the X endstop
-const int   Z_HOME_DIR     = -1;
+const float R_STEPS_PER_MM  = 80.0;   // radial railcart: microstepping + belt pitch
+const float A_STEPS_PER_DEG = 80.0;   // rotary base: microstepping * gear ratio / 360
+const float P_STEPS_PER_MM  = 80.0;   // pulley winch
+const bool  R_DIR_INVERT    = false;
+const bool  A_DIR_INVERT    = false;
+const bool  P_DIR_INVERT    = false;
+const int   R_HOME_DIR      = -1;     // sign of travel toward the radial endstop (inner)
+const int   A_HOME_DIR      = -1;     // sign of travel toward the rotary endstop
+const float R_HOME_MM       = 80.0;   // radius at the radial endstop (= r_min)
+const float A_HOME_DEG      = -60.0;  // pivot-frame angle at the rotary endstop
+const float R_MIN_MM        = 80.0;   // soft limits: reachable annulus
+const float R_MAX_MM        = 300.0;
+const float A_MIN_DEG        = -55.0; // soft limits: reachable sweep
+const float A_MAX_DEG        = 55.0;
 const bool  P_HAS_TOP_ENDSTOP = true;
 const float P_MAX_HEIGHT_MM   = 80.0; // magnet height when the top switch trips
 
-const float HOME_BACKOFF_MM = 3.0;
-const float HOME_SPEED_MM_S  = 10.0;
+const float HOME_BACKOFF_MM  = 3.0;
+const float HOME_SPEED_MM_S   = 10.0;
+const float ROTARY_SPEED_DEG_S = 40.0; // rotary slew (the host feed F is radial mm/min)
 const float MAX_FEED_MM_MIN  = 6000.0;
 const float DEFAULT_FEED_MM_MIN = 3000.0;
 const float ACCEL_MM_S2      = 800.0;
 // =============================================================================
 
-AccelStepper xStep(AccelStepper::DRIVER, X_STEP_PIN, X_DIR_PIN);
-AccelStepper zStep(AccelStepper::DRIVER, Z_STEP_PIN, Z_DIR_PIN);
+AccelStepper rStep(AccelStepper::DRIVER, R_STEP_PIN, R_DIR_PIN);
+AccelStepper aStep(AccelStepper::DRIVER, A_STEP_PIN, A_DIR_PIN);
 AccelStepper pStep(AccelStepper::DRIVER, P_STEP_PIN, P_DIR_PIN);
 
 bool    g_estopped = false;
@@ -72,13 +82,19 @@ float feedToSps(float feed_mm_min, float steps_per_mm) {
 inline bool endstopPressed(int pin) { return digitalRead(pin) == LOW; }
 void motorsEnabled(bool on) { digitalWrite(MOTOR_ENABLE, on ? LOW : HIGH); }
 
+float clampf(float v, float lo, float hi) {
+  if (v < lo) return lo;
+  if (v > hi) return hi;
+  return v;
+}
+
 void replyOK(const char* extra = nullptr) {
   if (extra && *extra) { Serial.print("OK "); Serial.println(extra); }
   else                 { Serial.println("OK"); }
 }
 void replyErr(const char* msg) { Serial.print("ERR "); Serial.println(msg); }
 
-// Find a token like "X12.34" in a space-delimited (mutable) string.
+// Find a token like "R12.34" in a space-delimited (mutable) string.
 bool readKeyed(char* str, char key, float* out) {
   for (char* tok = strtok(str, " "); tok; tok = strtok(nullptr, " ")) {
     if (tok[0] == key && tok[1] != '\0') { *out = atof(tok + 1); return true; }
@@ -94,21 +110,24 @@ bool argKeyed(char key, float* out) {
 }
 
 void applyDefaultSpeeds() {
-  xStep.setMaxSpeed(feedToSps(DEFAULT_FEED_MM_MIN, X_STEPS_PER_MM));
-  zStep.setMaxSpeed(feedToSps(DEFAULT_FEED_MM_MIN, Z_STEPS_PER_MM));
+  rStep.setMaxSpeed(feedToSps(DEFAULT_FEED_MM_MIN, R_STEPS_PER_MM));
+  aStep.setMaxSpeed(ROTARY_SPEED_DEG_S * A_STEPS_PER_DEG);
   pStep.setMaxSpeed(feedToSps(DEFAULT_FEED_MM_MIN, P_STEPS_PER_MM));
 }
 
 // ----------------------------- homing ----------------------------------------
-void homeAxis(AccelStepper& s, int endstopPin, int homeDir, float stepsPerMm) {
-  float sps = HOME_SPEED_MM_S * stepsPerMm;
+// Seek the endstop, back off, and call that physical point `homeValue` (in the
+// axis's own units * stepsPerUnit), so absolute moves work straight after.
+void homeAxis(AccelStepper& s, int endstopPin, int homeDir, float stepsPerUnit,
+              float homeValue) {
+  float sps = HOME_SPEED_MM_S * stepsPerUnit;
   s.setMaxSpeed(sps);
   s.setSpeed(homeDir * sps);
   while (!endstopPressed(endstopPin)) s.runSpeed();   // seek the switch
-  s.setCurrentPosition(0);
-  s.moveTo((long)(-homeDir * HOME_BACKOFF_MM * stepsPerMm));  // back off, that's zero
+  s.setCurrentPosition((long)(homeValue * stepsPerUnit));
+  // back off a touch, into the reachable range
+  s.moveTo((long)((homeValue - homeDir * HOME_BACKOFF_MM) * stepsPerUnit));
   while (s.distanceToGo() != 0) s.run();
-  s.setCurrentPosition(0);
 }
 
 void homePulley() {
@@ -124,21 +143,23 @@ void homePulley() {
 void doHome() {
   g_estopped = false;
   motorsEnabled(true);
-  homeAxis(xStep, X_ENDSTOP_PIN, X_HOME_DIR, X_STEPS_PER_MM);
-  homeAxis(zStep, Z_ENDSTOP_PIN, Z_HOME_DIR, Z_STEPS_PER_MM);
+  homeAxis(rStep, R_ENDSTOP_PIN, R_HOME_DIR, R_STEPS_PER_MM, R_HOME_MM);
+  homeAxis(aStep, A_ENDSTOP_PIN, A_HOME_DIR, A_STEPS_PER_DEG, A_HOME_DEG);
   homePulley();
   applyDefaultSpeeds();
 }
 
 // ----------------------------- motion ----------------------------------------
-void doMoveXZ(float xmm, float zmm, float feed) {
-  xStep.setMaxSpeed(feedToSps(feed, X_STEPS_PER_MM));
-  zStep.setMaxSpeed(feedToSps(feed, Z_STEPS_PER_MM));
-  xStep.moveTo((long)(xmm * X_STEPS_PER_MM));
-  zStep.moveTo((long)(zmm * Z_STEPS_PER_MM));
-  while (xStep.distanceToGo() != 0 || zStep.distanceToGo() != 0) {
-    xStep.run();
-    zStep.run();
+void doMoveRA(float rmm, float adeg, float feed) {
+  rmm  = clampf(rmm, R_MIN_MM, R_MAX_MM);
+  adeg = clampf(adeg, A_MIN_DEG, A_MAX_DEG);
+  rStep.setMaxSpeed(feedToSps(feed, R_STEPS_PER_MM));
+  aStep.setMaxSpeed(ROTARY_SPEED_DEG_S * A_STEPS_PER_DEG);
+  rStep.moveTo((long)(rmm * R_STEPS_PER_MM));
+  aStep.moveTo((long)(adeg * A_STEPS_PER_DEG));
+  while (rStep.distanceToGo() != 0 || aStep.distanceToGo() != 0) {
+    rStep.run();
+    aStep.run();
   }
 }
 
@@ -151,14 +172,14 @@ void doPulley(float hmm, float feed) {
 }
 
 void doStatus() {
-  float xmm = xStep.currentPosition() / X_STEPS_PER_MM;
-  float zmm = zStep.currentPosition() / Z_STEPS_PER_MM;
-  float hmm = pStep.currentPosition() / P_STEPS_PER_MM;
+  float rmm  = rStep.currentPosition() / R_STEPS_PER_MM;
+  float adeg = aStep.currentPosition() / A_STEPS_PER_DEG;
+  float hmm  = pStep.currentPosition() / P_STEPS_PER_MM;
   char buf[80];
-  snprintf(buf, sizeof(buf), "X%.2f Z%.2f H%.2f MAG%d ENDX%d ENDZ%d",
-           xmm, zmm, hmm, g_magnetOn ? 1 : 0,
-           endstopPressed(X_ENDSTOP_PIN) ? 1 : 0,
-           endstopPressed(Z_ENDSTOP_PIN) ? 1 : 0);
+  snprintf(buf, sizeof(buf), "R%.2f A%.2f H%.2f MAG%d ENDR%d ENDA%d",
+           rmm, adeg, hmm, g_magnetOn ? 1 : 0,
+           endstopPressed(R_ENDSTOP_PIN) ? 1 : 0,
+           endstopPressed(A_ENDSTOP_PIN) ? 1 : 0);
   replyOK(buf);
 }
 
@@ -187,13 +208,13 @@ void handleLine(char* line) {
   } else if (g_estopped) {
     replyErr("estopped; send HOME to clear");
   } else if (!strcmp(cmd, "MOVE")) {
-    float x = xStep.currentPosition() / X_STEPS_PER_MM;
-    float z = zStep.currentPosition() / Z_STEPS_PER_MM;
+    float r = rStep.currentPosition() / R_STEPS_PER_MM;
+    float a = aStep.currentPosition() / A_STEPS_PER_DEG;
     float f = DEFAULT_FEED_MM_MIN;
-    argKeyed('X', &x);
-    argKeyed('Z', &z);
+    argKeyed('R', &r);
+    argKeyed('A', &a);
     argKeyed('F', &f);
-    doMoveXZ(x, z, f);
+    doMoveRA(r, a, f);
     replyOK();
   } else if (!strcmp(cmd, "PULLEY")) {
     float h = pStep.currentPosition() / P_STEPS_PER_MM;
@@ -219,15 +240,15 @@ void setup() {
   motorsEnabled(true);
   pinMode(MAGNET_PIN, OUTPUT);
   digitalWrite(MAGNET_PIN, LOW);
-  pinMode(X_ENDSTOP_PIN, INPUT_PULLUP);
-  pinMode(Z_ENDSTOP_PIN, INPUT_PULLUP);
+  pinMode(R_ENDSTOP_PIN, INPUT_PULLUP);
+  pinMode(A_ENDSTOP_PIN, INPUT_PULLUP);
   if (P_HAS_TOP_ENDSTOP) pinMode(P_TOP_ENDSTOP, INPUT_PULLUP);
 
-  xStep.setPinsInverted(X_DIR_INVERT, false, false);
-  zStep.setPinsInverted(Z_DIR_INVERT, false, false);
+  rStep.setPinsInverted(R_DIR_INVERT, false, false);
+  aStep.setPinsInverted(A_DIR_INVERT, false, false);
   pStep.setPinsInverted(P_DIR_INVERT, false, false);
-  xStep.setAcceleration(ACCEL_MM_S2 * X_STEPS_PER_MM);
-  zStep.setAcceleration(ACCEL_MM_S2 * Z_STEPS_PER_MM);
+  rStep.setAcceleration(ACCEL_MM_S2 * R_STEPS_PER_MM);
+  aStep.setAcceleration(ACCEL_MM_S2 * A_STEPS_PER_DEG);
   pStep.setAcceleration(ACCEL_MM_S2 * P_STEPS_PER_MM);
   applyDefaultSpeeds();
 

@@ -66,7 +66,7 @@ class MockMotion(MotionController):
 
     # -- test helpers -------------------------------------------------------- #
     def moves(self) -> list[tuple]:
-        """Just the (x,z) gantry moves, for concise assertions."""
+        """Just the (x,z) head moves, for concise assertions."""
         return [(o[1], o[2]) for o in self.ops if o[0] == "move"]
 
     def reset_log(self) -> None:

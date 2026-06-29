@@ -2,7 +2,7 @@
 
 `GameState` wraps a python-chess board with the bits the application needs
 (whose turn, machine color, history, game-over text). `classify_move` turns a
-legal move into the physical operations the gantry must perform — this is the
+legal move into the physical operations the crane must perform — this is the
 bridge between chess rules and the motion choreography.
 """
 from __future__ import annotations

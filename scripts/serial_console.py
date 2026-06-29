@@ -6,7 +6,7 @@
     OK PONG
     > HOME
     OK HOMED
-    > MOVE X50 Z50 F4000
+    > MOVE R150 A0 F4000
     OK
 
 Type protocol lines; everything the board sends back (OK / ERR / # debug) is

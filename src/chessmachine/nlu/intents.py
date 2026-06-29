@@ -7,6 +7,7 @@ from typing import Optional
 # The full set of actions the controller can dispatch.
 ACTIONS = {
     "set_difficulty",   # difficulty: easy|medium|hard or an elo number
+    "set_side",         # color: the color the MACHINE should play (None = swap sides)
     "analyze",          # question: free-text question about the position
     "engine_move",      # make and actuate the machine's own move
     "opponent_move",    # move: the human's move, to validate and actuate
@@ -29,6 +30,8 @@ INTENT_JSON_SCHEMA = {
                  "description": "the chess move in UCI or SAN, e.g. 'e2e4' or 'Nf3'"},
         "difficulty": {"type": ["string", "null"],
                        "description": "easy, medium, hard, or an Elo number"},
+        "color": {"type": ["string", "null"],
+                  "description": "for set_side: the color the robot will play ('white'/'black'); omit to swap"},
         "question": {"type": ["string", "null"],
                      "description": "the user's question about the position"},
     },
@@ -41,6 +44,7 @@ class Intent:
     action: str
     move: Optional[str] = None
     difficulty: Optional[str] = None
+    color: Optional[str] = None           # set_side: machine's target color (None = swap)
     question: Optional[str] = None
     text: Optional[str] = None            # original transcript
     raw: Optional[dict] = None            # raw model output, for debugging
@@ -66,7 +70,18 @@ def intent_from_json(data: dict, transcript: str = "") -> Intent:
         action=action,
         move=_clean(data.get("move")),
         difficulty=_clean(data.get("difficulty")),
+        color=_clean(data.get("color")),
         question=_clean(data.get("question")),
         text=transcript,
         raw=data,
     )
+
+
+def intents_from_json(data, transcript: str = "") -> list[Intent]:
+    """Build a list of Intents from model output that is either a single action
+    object or a list of them (a compound request)."""
+    if isinstance(data, dict) and isinstance(data.get("actions"), list):
+        data = data["actions"]            # tolerate {"actions": [...]} wrappers
+    items = data if isinstance(data, list) else [data]
+    intents = [intent_from_json(d, transcript) for d in items]
+    return intents or [Intent(action="unknown", text=transcript)]

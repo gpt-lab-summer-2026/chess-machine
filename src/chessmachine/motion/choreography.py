@@ -19,7 +19,7 @@ from ..chess_engine.game import classify_move, MoveClassification, MoveKind
 from ..config import SpeedsConfig, MagnetConfig
 from .base import MotionController
 from .geometry import BoardGeometry, Point
-from .graveyard import Graveyard
+from .graveyard import Graveyard, GraveyardFull
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class Choreographer:
         """Split a move into (complete, report): the captured piece (if any) is
         cleared to storage *now* (blocking), and `complete()` actuates the rest.
 
-        This lets the caller speak the move and its explanation while the gantry
+        This lets the caller speak the move and its explanation while the crane
         carries the piece — but only after the capture's discard has finished,
         so the board never looks wrong while we talk. `complete()` is safe to run
         on a worker thread (it touches only the motion controller).
@@ -205,31 +205,82 @@ class Choreographer:
 
     # -- public: rebuild the starting position ------------------------------ #
     def setup_starting_position(self, current_board: chess.Board) -> list[str]:
-        """Reset the board: clear everything to storage, then place a fresh set.
+        """Rearrange the physical board into the standard starting position.
 
-        Works when total storage capacity covers every physical piece on the
-        board (default geometry provides 32 slots = a full set).
+        Pieces already on a correct home square stay put, and others are moved
+        straight to where they belong using the pieces already on the board —
+        storage is only used to break a cycle (two pieces on each other's home
+        square), to stage an excess piece (e.g. a promoted second queen), or to
+        source a piece that is currently in the graveyard. So a reset no longer
+        needs a full 32-slot staging area; it only asks for a manual finish if it
+        genuinely runs out of storage, and names any piece it can't supply.
         """
         notes: list[str] = []
-        on_board = current_board.piece_map()
-        if len(on_board) > self.graveyard.free() + self.graveyard.occupied():
-            notes.append("Not enough storage to auto-reset; please reset by hand.")
-            return notes
+        target = chess.Board().piece_map()
+        board_now = dict(current_board.piece_map())
+        exhausted = False
 
-        # 1) Clear board into storage.
-        for square, piece in list(on_board.items()):
-            slot = self.graveyard.store(piece)
-            self._transfer(self._sq(square), slot)
+        def satisfied(sq: int) -> bool:
+            return board_now.get(sq) == target.get(sq)
 
-        # 2) Place a standard starting set, sourcing pieces from storage.
-        start = chess.Board()
-        for square, piece in start.piece_map().items():
+        def move_board(src: int, dst: int) -> None:
+            self._transfer(self._sq(src), self._sq(dst))
+            board_now[dst] = board_now.pop(src)
+
+        def to_grave(sq: int) -> bool:
+            try:
+                slot = self.graveyard.store(board_now[sq])
+            except GraveyardFull:
+                return False
+            self._transfer(self._sq(sq), slot)
+            del board_now[sq]
+            return True
+
+        def from_grave(piece: chess.Piece, dst: int) -> bool:
             pt = self.graveyard.retrieve(piece.piece_type, piece.color)
             if pt is None:
-                notes.append(
-                    f"Missing a {'white' if piece.color else 'black'} "
-                    f"{chess.piece_name(piece.piece_type)} for {chess.square_name(square)}."
-                )
+                return False
+            self._transfer(pt, self._sq(dst))
+            board_now[dst] = piece
+            return True
+
+        gave_up: set[int] = set()
+        while not exhausted:
+            pending = [sq for sq in target if not satisfied(sq) and sq not in gave_up]
+            if not pending:
+                break
+            progressed = False
+            for sq in pending:
+                if sq in board_now:            # occupied by a wrong piece; free it later
+                    continue
+                need = target[sq]
+                # Prefer a piece already on the board (avoids storage entirely).
+                src = next((s for s, p in board_now.items()
+                            if p == need and not satisfied(s)), None)
+                if src is not None:
+                    move_board(src, sq)
+                elif from_grave(need, sq):
+                    pass
+                else:
+                    gave_up.add(sq)
+                    notes.append(
+                        f"I'm missing a {'white' if need.color else 'black'} "
+                        f"{chess.piece_name(need.piece_type)} for {chess.square_name(sq)}."
+                    )
+                progressed = True
+            if progressed:
                 continue
-            self._transfer(pt, self._sq(square))
+            # Every pending home square is blocked by a wrong piece (a cycle):
+            # park one in storage to break it open.
+            blocked = next(sq for sq in pending if sq in board_now)
+            exhausted = not to_grave(blocked)
+
+        # Clear any leftover pieces that aren't part of the starting set.
+        for sq in [s for s in board_now if not satisfied(s)]:
+            if not to_grave(sq):
+                exhausted = True
+                break
+
+        if exhausted:
+            notes.append("I ran out of storage mid-reset; please finish by hand.")
         return notes

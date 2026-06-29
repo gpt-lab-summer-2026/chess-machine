@@ -8,8 +8,14 @@ from .intents import Intent
 
 class NLU(ABC):
     @abstractmethod
-    def interpret(self, transcript: str, context: dict) -> Intent:
-        """Classify an utterance into an Intent. `context` carries the live board."""
+    def interpret(self, transcript: str, context: dict) -> list[Intent]:
+        """Translate an utterance into the structured intents it asks for, in order.
+
+        A single request yields one intent; a compound one ("give me black and
+        set difficulty to hard") yields several. The SLM does this language work;
+        the pipeline just dispatches whatever comes back. `context` carries the
+        live board.
+        """
 
     @abstractmethod
     def phrase_analysis(self, question: str, facts: dict) -> str:
