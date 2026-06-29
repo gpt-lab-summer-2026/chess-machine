@@ -101,19 +101,30 @@ src/chessmachine/
   voice/               distil-whisper STT, Kokoro TTS, mic/VAD capture
 firmware/esp32_chess/  Arduino firmware: steppers + pulley + magnet + protocol
 scripts/               calibrate.py, serial_console.py, fetch_models.sh
-tests/                 pytest suite for the hardware-free core (51 tests)
+tests/                 pytest suite for the hardware-free core (140+ tests)
 docs/                  ARCHITECTURE, HARDWARE, PROTOCOL, SETUP_PI
+.github/workflows/     CI: ruff + mypy + pytest on Python 3.10-3.12
 ```
 
-## Testing
+## Development & testing
+
+Install the dev extras (pytest, ruff, mypy, coverage) and run the same checks CI does:
 
 ```bash
-pip install pytest && python -m pytest      # 51 tests, no hardware needed
+pip install -e ".[dev]"
+python -m pytest            # 140+ tests, no hardware or models needed
+ruff check .                # lint (no autoformatter; lint only)
+mypy src                    # type-check
 ```
 
-Covers config merging, board geometry, move classification, the speech→move
-parser, the full pick-and-place choreography (asserted op-by-op against the mock
-motor), intent routing, and an end-to-end scripted game (including Scholar's mate).
+Tests cover config merging + validation, board geometry, move classification,
+the speech→move parser, position analysis (material, evaluation, move-quality,
+tactics), the pick-and-place choreography (asserted op-by-op against the mock
+motor), the ESP32 serial protocol (against a fake port), the SLM and rule-based
+NLU, intent routing, and an end-to-end scripted game (including Scholar's mate).
+
+[CI](.github/workflows/ci.yml) runs ruff + mypy + pytest on Python 3.10-3.12 on
+every push and pull request.
 
 ## Known limitations
 
