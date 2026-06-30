@@ -7,9 +7,13 @@ Difficulty maps onto Stockfish's Skill Level / UCI_Elo plus a search limit.
 from __future__ import annotations
 
 import logging
+import os
 import random
+import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from glob import glob
+from pathlib import Path
 from typing import Optional
 
 import chess
@@ -20,6 +24,67 @@ log = logging.getLogger(__name__)
 
 # Modern Stockfish refuses UCI_Elo below this; below it we lean on Skill Level.
 _ELO_FLOOR = 1320
+
+
+def _wellknown_stockfish_paths() -> list[str]:
+    """Per-platform locations where Stockfish commonly lands, so the same config
+    works on every machine without a hardcoded absolute path. Glob patterns are
+    expanded by the caller; literal paths are tried as-is."""
+    home = Path.home()
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local"))
+        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        return [
+            # winget (how it's installed on the dev laptops)
+            str(Path(local) / "Microsoft" / "WinGet" / "Packages"
+                / "Stockfish.Stockfish*" / "**" / "stockfish*.exe"),
+            # scoop / chocolatey
+            str(home / "scoop" / "apps" / "stockfish" / "**" / "stockfish*.exe"),
+            str(Path(local) / "Programs" / "stockfish" / "**" / "stockfish*.exe"),
+            str(Path(program_files) / "Stockfish" / "**" / "stockfish*.exe"),
+        ]
+    # Linux (Pi/apt) + macOS (homebrew)
+    return [
+        "/usr/bin/stockfish",
+        "/usr/games/stockfish",
+        "/usr/local/bin/stockfish",
+        "/opt/homebrew/bin/stockfish",
+        str(home / ".local" / "bin" / "stockfish"),
+    ]
+
+
+def resolve_stockfish_path(configured: str) -> str:
+    """Find a usable Stockfish binary, so one config runs on every machine.
+
+    Resolution order:
+      1. `configured` if it points at an existing file (an explicit path).
+      2. `configured` resolved on PATH (the default "stockfish", or any command).
+      3. Well-known per-platform install locations (winget/scoop on Windows,
+         apt/brew on Linux/macOS) — lets the config just say "stockfish".
+
+    Returns the first match. If nothing is found, returns `configured` unchanged
+    so the caller still raises a clear error naming what was looked for.
+    """
+    expanded = Path(configured).expanduser()
+    if expanded.is_file():
+        return str(expanded)
+
+    on_path = shutil.which(configured)
+    if on_path:
+        return on_path
+
+    for pattern in _wellknown_stockfish_paths():
+        if any(ch in pattern for ch in "*?["):
+            matches = sorted(glob(pattern, recursive=True))
+            hit = next((m for m in matches if Path(m).is_file()), None)
+        else:
+            hit = pattern if Path(pattern).is_file() else None
+        if hit:
+            log.info("Auto-detected Stockfish at %s (config requested %r)",
+                     hit, configured)
+            return hit
+
+    return configured
 
 
 @dataclass
@@ -69,7 +134,8 @@ class StockfishEngine(ChessEngine):
         import chess.engine  # local import: only needed for the real engine
 
         self.cfg = cfg
-        self._engine = chess.engine.SimpleEngine.popen_uci(cfg.stockfish_path)
+        self.stockfish_path = resolve_stockfish_path(cfg.stockfish_path)
+        self._engine = chess.engine.SimpleEngine.popen_uci(self.stockfish_path)
         self._configure_base()
         self._limit = chess.engine.Limit(time=0.8)
         self.set_difficulty(cfg.presets[cfg.default_difficulty])
@@ -197,7 +263,10 @@ def create_engine(cfg: EngineConfig) -> ChessEngine:
                             cfg.stockfish_path)
                 return RandomEngine()
             raise RuntimeError(
-                f"Stockfish not found at '{cfg.stockfish_path}'. Install it "
-                "(e.g. `apt install stockfish`) or set engine.backend=random."
+                f"Stockfish not found (config requested '{cfg.stockfish_path}', "
+                "and auto-detection on PATH and the usual winget/apt/brew locations "
+                "came up empty). Install it (e.g. `winget install Stockfish.Stockfish` "
+                "or `apt install stockfish`), set engine.stockfish_path, or use "
+                "engine.backend=random."
             ) from exc
     raise ValueError(f"Unknown engine backend: {cfg.backend!r}")

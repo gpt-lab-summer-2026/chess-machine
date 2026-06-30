@@ -46,7 +46,9 @@ slm:
 
 engine:
   backend: stockfish        # stockfish | random (dev/fallback)
-  stockfish_path: stockfish # path or command on PATH
+  stockfish_path: stockfish # bare command -> auto-detected on PATH and in the
+                            # usual winget/scoop/apt/brew locations. Set an
+                            # absolute path only to override that.
   threads: 2
   hash_mb: 256
   default_difficulty: medium
