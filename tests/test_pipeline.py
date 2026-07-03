@@ -202,3 +202,27 @@ def test_new_game_clears_stale_storage():
     assert gy.occupied() == 1
     m.handle("new game")
     assert gy.occupied() == 0
+
+
+def test_difficulty_by_elo_number():
+    # A numeric difficulty ("set difficulty to 1200") is synthesized via
+    # preset_from_elo; regression for the missing import that made it crash.
+    m, tts = make(auto_reply=False)
+    m.handle("set difficulty to 1200")
+    assert m.difficulty == "1200 Elo"
+    assert any("1200" in l for l in tts.lines)
+
+
+def test_actuation_failure_is_surfaced_not_swallowed():
+    # If the crane fails mid-move on the worker thread, the machine must warn the
+    # user (the logical move is already applied) instead of silently desyncing.
+    from chessmachine.motion.choreography import ExecutionReport
+    from chessmachine.chess_engine.game import MoveKind
+
+    m, tts = make(auto_reply=False)               # concurrent_actuation defaults True
+    def boom():
+        raise RuntimeError("motor jam")
+    m.choreo.begin_move = lambda b, mv: (boom, ExecutionReport(kind=MoveKind.NORMAL))
+    m.handle("e4")
+    assert m.game.history[-1][1] == "e4"          # move applied logically (no rollback)
+    assert any("check the board" in l.lower() for l in tts.lines)

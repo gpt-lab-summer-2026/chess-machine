@@ -16,7 +16,7 @@ from typing import Optional
 import chess
 
 from .clock import MatchClock
-from .config import Config, DifficultyPreset
+from .config import Config, DifficultyPreset, preset_from_elo
 from .chess_engine import GameState, ChessEngine, analysis
 from .chess_engine.game import speak_san
 from .motion import Choreographer
@@ -267,10 +267,11 @@ class ChessMachine:
         # notes aren't known until the crane finishes — run those synchronously.
         concurrent = self.cfg.app.concurrent_actuation and move.promotion is None
         motion: Optional[threading.Thread] = None
+        motion_result: Optional[dict] = None
         if concurrent:
             complete, report = self.choreo.begin_move(board_before, move)   # discard now (blocks)
             if not report.aborted:
-                motion = self._spawn_motion(complete)
+                motion, motion_result = self._spawn_motion(complete)
         else:
             report = self.choreo.execute_move(board_before, move)
         if report.aborted:
@@ -292,19 +293,32 @@ class ChessMachine:
         self._say(text)                 # spoken while the crane is still moving
         if motion is not None:
             motion.join()               # don't begin the next move until actuation is done
+            if motion_result["error"] is not None:
+                # The move is already applied logically, but the crane didn't
+                # finish — flag the possible desync rather than swallowing it.
+                self._say("I couldn't finish moving that piece — please check the "
+                          "board matches the position before we continue.")
         return text
 
-    def _spawn_motion(self, complete) -> threading.Thread:
-        """Run the rest of a move's actuation on a worker thread."""
+    def _spawn_motion(self, complete) -> tuple[threading.Thread, dict]:
+        """Run the rest of a move's actuation on a worker thread.
+
+        Returns the thread and a `result` holder whose "error" is set if
+        actuation raised, so the caller can surface a physical/logical desync
+        after joining instead of silently swallowing it. The turn never crashes.
+        """
+        result: dict = {"error": None}
+
         def run():
             try:
                 complete()
-            except Exception:  # noqa: BLE001 - surface, but never crash the turn
+            except Exception as exc:  # noqa: BLE001 - reported via `result`, not raised
                 log.exception("Actuation failed during concurrent move")
+                result["error"] = exc
 
         thread = threading.Thread(target=run, name="crane", daemon=True)
         thread.start()
-        return thread
+        return thread, result
 
     def _move_comment(self, board_before: chess.Board, move: chess.Move, san: str) -> str:
         """Coach-style reaction to a noteworthy move (quality + grounded tactics).

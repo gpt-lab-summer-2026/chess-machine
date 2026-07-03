@@ -26,9 +26,13 @@ KokoroTTS.say()                        voice/tts.py        (x,z)→(r,θ) in ser
    speaker (sounddevice)
 ```
 
-Single-threaded and synchronous: `ChessMachine.run()` loops listen → handle →
-speak. Each motion command blocks until the ESP32 acknowledges, so there is no
-motor-state bookkeeping on the host and no concurrency to reason about.
+Mostly synchronous: `ChessMachine.run()` loops listen → handle → speak, and each
+motion command blocks until the ESP32 acknowledges, so the host keeps no
+motor-state bookkeeping. The one concurrency: when `concurrent_actuation` is on,
+`_play_move` runs the piece's travel on a short-lived worker thread so the machine
+can narrate the move while the crane is still moving. It always `join()`s that
+thread before the next turn, and a worker-thread actuation failure is surfaced to
+the user ("please check the board") rather than swallowed.
 
 ## Layers (inner → outer)
 
