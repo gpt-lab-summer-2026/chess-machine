@@ -15,7 +15,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from glob import glob
 from pathlib import Path
-from typing import Optional
 
 import chess
 
@@ -34,7 +33,7 @@ def _wellknown_stockfish_paths() -> list[str]:
     home = Path.home()
     if os.name == "nt":
         local = os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local"))
-        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
         return [
             # winget (how it's installed on the dev laptops)
             str(Path(local) / "Microsoft" / "WinGet" / "Packages"

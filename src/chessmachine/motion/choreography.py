@@ -126,6 +126,7 @@ class Choreographer:
         # Clear a captured piece to storage first (normal capture or en passant).
         # Castling is never a capture, so this is skipped for it.
         if not cls.is_castle and cls.is_capture and cls.captured_piece is not None:
+            assert cls.captured_square is not None
             slot = self.graveyard.store(cls.captured_piece)
             self._transfer(self._sq(cls.captured_square), slot)
             report.transfers += 1
@@ -139,6 +140,7 @@ class Choreographer:
     def _actuate_body(self, cls: MoveClassification, report: ExecutionReport) -> None:
         """The piece's own travel (after any capture has been discarded)."""
         if cls.is_castle:
+            assert cls.rook_from is not None and cls.rook_to is not None
             self._transfer(self._sq(cls.from_square), self._sq(cls.to_square))   # king
             self._transfer(self._sq(cls.rook_from), self._sq(cls.rook_to))       # rook
             report.transfers += 2

@@ -24,21 +24,24 @@ def _ctx(board=None):
     ("the weather is nice today", "unknown"),
 ])
 def test_interpret_routing(text, action):
-    assert RuleBasedNLU().interpret(text, _ctx()).action == action
+    assert RuleBasedNLU().interpret(text, _ctx())[0].action == action
 
 
 def test_difficulty_extraction():
     nlu = RuleBasedNLU()
-    assert nlu.interpret("set difficulty to hard", _ctx()).difficulty == "hard"
-    assert nlu.interpret("make it easy", _ctx()).difficulty == "easy"
-    assert nlu.interpret("set elo to 1600", _ctx()).difficulty == "1600"
+    assert nlu.interpret("set difficulty to hard", _ctx())[0].difficulty == "hard"
+    assert nlu.interpret("make it easy", _ctx())[0].difficulty == "easy"
+    assert nlu.interpret("set elo to 1600", _ctx())[0].difficulty == "1600"
 
 
 def test_color_switch():
     nlu = RuleBasedNLU()
-    i = nlu.interpret("let me play black", _ctx())
-    assert i.action == "set_color" and i.color == "black"
-    assert nlu.interpret("switch sides", _ctx()).action == "set_color"
+    # "let me play black" -> the user wants black, so the MACHINE takes white.
+    i = nlu.interpret("let me play black", _ctx())[0]
+    assert i.action == "set_side" and i.color == "white"
+    # "switch sides" is a swap: set_side with no explicit color.
+    swap = nlu.interpret("switch sides", _ctx())[0]
+    assert swap.action == "set_side" and swap.color is None
 
 
 def test_looks_like_move():

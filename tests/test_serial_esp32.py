@@ -48,21 +48,21 @@ def test_feed_formatting():
 
 
 def test_parse_status():
-    out = SerialMotion._parse_status("X10.00 Z20.50 H5.00 MAG1 ENDX0 ENDZ1")
-    assert out == {"x": 10.0, "z": 20.5, "height": 5.0,
-                   "magnet": True, "endstop_x": False, "endstop_z": True}
+    out = SerialMotion._parse_status("R10.00 A20.50 H5.00 MAG1 ENDR0 ENDA1")
+    assert out == {"r": 10.0, "a": 20.5, "height": 5.0,
+                   "magnet": True, "endstop_r": False, "endstop_a": True}
 
 
 def test_move_xz_writes_protocol_line():
     sm = _motion(["OK"])
-    sm.move_xz(70.0, 25.0, 1200)
-    assert sm._ser.written == [b"MOVE X70.00 Z25.00 F1200\n"]
+    sm.move_xz(70.0, 25.0, 1200)                         # (x,z) -> polar (r mm, a deg)
+    assert sm._ser.written == [b"MOVE R74.33 A19.65 F1200\n"]
 
 
 def test_move_xz_without_feed_omits_feed_term():
     sm = _motion(["OK"])
     sm.move_xz(1.0, 2.0)
-    assert sm._ser.written == [b"MOVE X1.00 Z2.00\n"]
+    assert sm._ser.written == [b"MOVE R2.24 A63.43\n"]
 
 
 def test_set_pulley_and_magnet_lines():
@@ -115,6 +115,6 @@ def test_command_without_connection_raises():
 
 
 def test_status_parses_reply():
-    sm = _motion(["OK X1.00 Z2.00 H3.00 MAG0 ENDX1 ENDZ0"])
-    assert sm.status() == {"x": 1.0, "z": 2.0, "height": 3.0,
-                           "magnet": False, "endstop_x": True, "endstop_z": False}
+    sm = _motion(["OK R1.00 A2.00 H3.00 MAG0 ENDR1 ENDA0"])
+    assert sm.status() == {"r": 1.0, "a": 2.0, "height": 3.0,
+                           "magnet": False, "endstop_r": True, "endstop_a": False}

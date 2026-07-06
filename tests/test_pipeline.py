@@ -252,7 +252,7 @@ def test_opponent_move_prefers_spoken_text_over_slm_guess():
     m, _ = make(auto_reply=False)
 
     def fake_interpret(transcript, context):
-        return Intent(action="opponent_move", move="a1a8", text="knight to f3")
+        return [Intent(action="opponent_move", move="a1a8", text="knight to f3")]
 
     m.nlu.interpret = fake_interpret
     m.handle("whatever whisper produced")
@@ -271,8 +271,8 @@ def test_difficulty_by_elo_number():
 def test_actuation_failure_is_surfaced_not_swallowed():
     # If the crane fails mid-move on the worker thread, the machine must warn the
     # user (the logical move is already applied) instead of silently desyncing.
-    from chessmachine.motion.choreography import ExecutionReport
     from chessmachine.chess_engine.game import MoveKind
+    from chessmachine.motion.choreography import ExecutionReport
 
     m, tts = make(auto_reply=False)               # concurrent_actuation defaults True
     def boom():

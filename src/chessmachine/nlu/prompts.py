@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..chess_engine.analysis import PositionFacts
 INTENT_SYSTEM = """You control a voice-operated chess robot. Convert the user's \
-utterance into JSON of the form {"actions": [ ... ]} and output nothing else. \
+utterance into JSON of the form {{"actions": [ ... ]}} and output nothing else. \
 Put ONE object per thing the user asked for, in order — usually one, but a \
 compound request like "give me black and make it harder" becomes two.
 
@@ -25,31 +25,7 @@ other one.
 evaluation). Put the question text in "question".
 - "new_game", "undo", "resign", "status", "repeat", "help", "chitchat".
 
-INTENT_SYSTEM = """You control a voice-operated chess robot. The user speaks; you \
-convert ONE utterance into ONE JSON object and output nothing else (no prose).
-
-Pick exactly one "action":
-- "opponent_move": the user states THEIR own move. Put it in "move" as UCI \
-(e2e4, d5e6) or SAN (Nf3, exd5, O-O). Use the squares they actually say — \
-"d5 takes e6" is move "d5e6". Never invent or change squares.
-- "engine_move": the user explicitly asks YOU to move ("your move", "you go", \
-"make your move"). A bare "okay", "hmm", or "sure" is NOT this — that is chitchat.
-- "set_difficulty": set strength; put easy, medium, hard, or an Elo number in "difficulty".
-- "set_color": the user wants to switch sides or pick a colour ("let me play \
-black", "I'll take white", "switch sides"). Put the colour THEY want in "color".
-- "analyze": a question about the position (who's winning, best move, threats). \
-Put the question in "question".
-- "undo": take back the last move ("undo", "take that back", "retake my turn", \
-"let me redo that").
-- "new_game": start over / reset the board.
-- "resign": the user gives up.
-- "status": whose turn it is, or the score.
-- "repeat": say the last thing again.
-- "help": what can you do.
-- "chitchat": anything else, including bare acknowledgements ("okay", "thanks", "cool").
-
-Fill only the slot for the chosen action ("move", "difficulty", "color", or \
-"question"); omit the others.
+Only fill "move", "difficulty", or "question" when relevant; otherwise omit them.
 Context: {context_line}"""
 
 # Few-shot pairs steer a small model toward strict, correct JSON. They cover the
@@ -58,7 +34,7 @@ INTENT_EXAMPLES = [
     ("knight to f3", '{"actions": [{"action": "opponent_move", "move": "Nf3"}]}'),
     ("I'll play e4", '{"actions": [{"action": "opponent_move", "move": "e2e4"}]}'),
     ("e5", '{"actions": [{"action": "opponent_move", "move": "e5"}]}'),            # black replies
-    ("knight to f6", '{"actions": [{"action": "opponent_move", "move": "Nf6"}]}'),  # black, verbatim
+    ("knight to f6", '{"actions": [{"action": "opponent_move", "move": "Nf6"}]}'),  # black
     ("castle kingside", '{"actions": [{"action": "opponent_move", "move": "O-O"}]}'),
     ("okay, your move", '{"actions": [{"action": "engine_move"}]}'),
     ("make it harder", '{"actions": [{"action": "set_difficulty", "difficulty": "hard"}]}'),
@@ -69,7 +45,7 @@ INTENT_EXAMPLES = [
     ("give me black and set difficulty to hard",
      '{"actions": [{"action": "set_side", "color": "white"}, '
      '{"action": "set_difficulty", "difficulty": "hard"}]}'),
-    ("who is winning right now?", '{"actions": [{"action": "analyze", "question": "who is winning"}]}'),
+    ("who is winning now?", '{"actions": [{"action": "analyze", "question": "who is winning"}]}'),
     ("what's the best move here", '{"actions": [{"action": "analyze", "question": "best move"}]}'),
     ("let's start a new game", '{"actions": [{"action": "new_game"}]}'),
     ("take that back", '{"actions": [{"action": "undo"}]}'),

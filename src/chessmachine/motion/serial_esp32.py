@@ -92,7 +92,7 @@ class SerialMotion(MotionController):
     def home(self) -> None:
         self._command("HOME", expect="HOMED", timeout=self.cfg.home_timeout_s)
 
-    def move_xz(self, x_mm: float, z_mm: float, feed: Optional[int] = None) -> None:
+    def move_xz(self, x_mm: float, z_mm: float, feed: int | None = None) -> None:
         # Planar (x,z) in the pivot frame -> polar (radial mm, rotary deg).
         r = math.hypot(x_mm, z_mm)
         a = math.degrees(math.atan2(z_mm, x_mm))

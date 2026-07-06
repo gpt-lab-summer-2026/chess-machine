@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..config import SlmConfig
 from .base import NLU
-from .intents import Intent, intent_from_json
+from .intents import Intent, intents_from_json
 from .prompts import build_analysis_messages, build_intent_messages, build_move_comment_messages
 
 if TYPE_CHECKING:

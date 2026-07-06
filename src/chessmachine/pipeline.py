@@ -12,14 +12,12 @@ import contextlib
 import logging
 import re
 import threading
-from typing import Optional
 
 import chess
 
-from .clock import MatchClock
-from .config import Config, DifficultyPreset, preset_from_elo
-from .chess_engine import GameState, ChessEngine, analysis
+from .chess_engine import ChessEngine, GameState, analysis
 from .chess_engine.game import speak_san
+from .clock import MatchClock
 from .config import Config, DifficultyPreset, preset_from_elo
 from .motion import Choreographer
 from .nlu import NLU, describe_candidates, parse_move
@@ -119,6 +117,10 @@ class ChessMachine:
         intents (the SLM does the language work, incl. splitting a compound
         request like "give me black and set difficulty to hard"); we just run
         each in order and join the spoken replies."""
+        # A pending confirmation (e.g. "new game" mid-game) intercepts the next
+        # utterance as a yes/no answer before any NLU dispatch.
+        if self._pending:
+            return self._resolve_pending(transcript)
         replies = []
         for intent in self.nlu.interpret(transcript, self._context()):
             log.info("intent=%s move=%s diff=%s color=%s", intent.action,
@@ -306,8 +308,8 @@ class ChessMachine:
         # Promotions can prompt for a manual piece swap mid-actuation, so their
         # notes aren't known until the crane finishes — run those synchronously.
         concurrent = self.cfg.app.concurrent_actuation and move.promotion is None
-        motion: Optional[threading.Thread] = None
-        motion_result: Optional[dict] = None
+        motion: threading.Thread | None = None
+        motion_result: dict | None = None
         if concurrent:
             complete, report = self.choreo.begin_move(board_before, move)   # discard now (blocks)
             if not report.aborted:
@@ -333,7 +335,7 @@ class ChessMachine:
         self._say(text)                 # spoken while the crane is still moving
         if motion is not None:
             motion.join()               # don't begin the next move until actuation is done
-            if motion_result["error"] is not None:
+            if motion_result is not None and motion_result["error"] is not None:
                 # The move is already applied logically, but the crane didn't
                 # finish — flag the possible desync rather than swallowing it.
                 self._say("I couldn't finish moving that piece — please check the "

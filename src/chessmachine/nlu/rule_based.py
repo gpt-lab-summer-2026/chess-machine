@@ -38,7 +38,7 @@ _MACHINE_SUBJECT = ("you ", "you're", "youre", "your", "you'll", "youll", "you p
                     "you take", "you be")
 
 
-def _side_request(t: str) -> Optional[str]:
+def _side_request(t: str) -> str | None:
     """Resolve a side-change request to the MACHINE's target color.
 
     Returns 'white'/'black' (machine plays it), 'swap' (toggle), or None.
@@ -99,12 +99,6 @@ class RuleBasedNLU(NLU):
                 if num:
                     diff = num.group(1)
             return Intent("set_difficulty", difficulty=diff, text=transcript)
-
-        m_color = re.search(r"\b(?:play|playing|be|switch to)\s+(?:as\s+)?(white|black)\b", t)
-        if m_color or _has(t, "switch sides", "swap sides", "switch colors", "swap colors"):
-            color = m_color.group(1) if m_color else (
-                "white" if "white" in t else "black" if "black" in t else None)
-            return Intent("set_color", color=color, text=transcript)
 
         if _has(t, "your move", "your turn", "you move", "your go", "make your move",
                 "make a move", "go ahead", "play your"):

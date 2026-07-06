@@ -56,25 +56,25 @@ def test_extract_json_raises_without_json():
 # -- interpret --------------------------------------------------------------- #
 def test_interpret_uses_model_json():
     nlu = SlmNLU(FakeClient('{"action": "engine_move"}'), RuleBasedNLU())
-    assert nlu.interpret("your move", _ctx()).action == "engine_move"
+    assert nlu.interpret("your move", _ctx())[0].action == "engine_move"
 
 
 def test_interpret_falls_back_when_model_says_unknown():
     nlu = SlmNLU(FakeClient('{"action": "unknown"}'), RuleBasedNLU())
     # rule-based reads "your move" as a request for the engine to move
-    assert nlu.interpret("your move", _ctx()).action == "engine_move"
+    assert nlu.interpret("your move", _ctx())[0].action == "engine_move"
 
 
 def test_interpret_falls_back_on_exception():
     client = FakeClient(raises=True)
     nlu = SlmNLU(client, RuleBasedNLU())
-    assert nlu.interpret("take that back", _ctx()).action == "undo"
+    assert nlu.interpret("take that back", _ctx())[0].action == "undo"
     assert client.calls == 1                     # the model was tried first
 
 
 def test_interpret_falls_back_on_garbage_output():
     nlu = SlmNLU(FakeClient("no json at all"), RuleBasedNLU())
-    assert nlu.interpret("let's start a new game", _ctx()).action == "new_game"
+    assert nlu.interpret("let's start a new game", _ctx())[0].action == "new_game"
 
 
 # -- phrasing / small talk / commentary -------------------------------------- #
