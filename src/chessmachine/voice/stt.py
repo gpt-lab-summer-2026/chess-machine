@@ -57,6 +57,8 @@ class DistilWhisperSTT(STT):
         samples = self.capture.record_utterance()
         text = self.transcribe(samples)
         log.info("STT: %r", text)
+        if text:
+            print(f"you> {text}")   # mirror the recognised speech in the terminal
         return text
 
 

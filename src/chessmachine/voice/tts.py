@@ -49,6 +49,10 @@ class KokoroTTS(TTS):
     def say(self, text: str) -> None:
         if not text:
             return
+        # Mirror the reply as text as well as speaking it, so the terminal shows
+        # the conversation (same prefix StdoutTTS uses in dev). Print first — the
+        # text should appear before the synthesis/playback delay.
+        print(f"[speaker] {text}")
         from .audio import play
 
         samples, sample_rate = self.synth(text)
