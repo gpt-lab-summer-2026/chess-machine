@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Interactive geometry calibration.
 
-Jog the gantry over the real board, mark the centers of a1 and h8, and print a
-ready-to-paste `motion.geometry` block. Line-based commands (one per line):
+Jog the head over the real board (in planar x/z; the crane converts to polar),
+mark the centers of a1 and h8, and print a ready-to-paste `motion.geometry`
+block. Line-based commands (one per line):
 
     x +5 / x -5      jog X by mm        z +5 / z -1      jog Z by mm
     h +2 / h -2      jog pulley height  mag on / mag off  electromagnet
@@ -29,7 +30,7 @@ from chessmachine.motion.geometry import BoardGeometry  # noqa: E402
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Interactive gantry calibration")
+    ap = argparse.ArgumentParser(description="Interactive crane calibration")
     ap.add_argument("--config", help="YAML config (for serial port + current geometry)")
     ap.add_argument("--mock", action="store_true", help="use the mock backend")
     ap.add_argument("--step", type=float, default=5.0, help="default jog step (mm)")

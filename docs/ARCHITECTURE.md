@@ -9,10 +9,10 @@ AudioCapture.record_utterance()        voice/audio.py     (mic + WebRTC VAD)
 DistilWhisperSTT.transcribe()          voice/stt.py       (faster-whisper, int8)
         │ "knight to f three"
         ▼
-NLU.interpret(transcript, context)     nlu/slm.py         → Intent{action, move, ...}
-        │                              (llama.cpp; rule_based fallback)
+NLU.interpret(transcript, context)     nlu/slm.py         → [Intent{action, move, ...}]
+        │                              (llama.cpp; rule_based fallback)   one or more
         ▼
-ChessMachine._dispatch(intent)         pipeline.py        ← holds GameState
+ChessMachine.handle → _dispatch(each)  pipeline.py        ← holds GameState
         ├── set_difficulty → engine.set_difficulty()
         ├── analyze        → analysis.describe_position() → NLU.phrase_analysis()
         ├── engine_move    → engine.best_move()  ┐
@@ -20,15 +20,19 @@ ChessMachine._dispatch(intent)         pipeline.py        ← holds GameState
                                                   ┘        │ low-level ops
         │ spoken text                                      ▼
         ▼                                          MotionController (serial/mock)
-KokoroTTS.say()                        voice/tts.py               │ protocol
+KokoroTTS.say()                        voice/tts.py        (x,z)→(r,θ) in serial
         │ float32 @ 24 kHz                                        ▼
-        ▼                                                   ESP32 firmware
+        ▼                                            ESP32 firmware (rotary+radial)
    speaker (sounddevice)
 ```
 
-Single-threaded and synchronous: `ChessMachine.run()` loops listen → handle →
-speak. Each motion command blocks until the ESP32 acknowledges, so there is no
-motor-state bookkeeping on the host and no concurrency to reason about.
+Mostly synchronous: `ChessMachine.run()` loops listen → handle → speak, and each
+motion command blocks until the ESP32 acknowledges, so the host keeps no
+motor-state bookkeeping. The one concurrency: when `concurrent_actuation` is on,
+`_play_move` runs the piece's travel on a short-lived worker thread so the machine
+can narrate the move while the crane is still moving. It always `join()`s that
+thread before the next turn, and a worker-thread actuation failure is surfaced to
+the user ("please check the board") rather than swallowed.
 
 ## Layers (inner → outer)
 
@@ -38,16 +42,20 @@ motor-state bookkeeping on the host and no concurrency to reason about.
    dev stand-in), and `analysis` (material, evaluation, best line → facts dict).
    No I/O, fully unit-tested.
 
-2. **`motion/`** — physical actuation. `BoardGeometry` maps squares → (x,z) mm;
-   `Graveyard` tracks captured pieces; `MotionController` is the transport
-   interface with `SerialMotion` (ESP32) and `MockMotion` (records ops)
-   implementations; `Choreographer` turns a `chess.Move` into pick-and-place
-   sequences. Knows chess shapes but not *why* a move was chosen.
+2. **`motion/`** — physical actuation. `BoardGeometry` maps squares → planar
+   (x,z) mm in the crane-pivot frame; `Graveyard` tracks captured pieces;
+   `MotionController` is the transport interface with `SerialMotion` (ESP32,
+   which converts each (x,z) to polar r/θ for the crane) and `MockMotion`
+   (records planar ops); `Choreographer` turns a `chess.Move` into
+   pick-and-place sequences. Knows chess shapes but not *why* a move was chosen.
 
 3. **`nlu/`** — language only. `move_parsing` resolves speech → a legal move
    (exact SAN/UCI first, then fuzzy square/piece extraction, always filtered by
-   legality). `SlmNLU` calls llama.cpp for intent JSON + answer phrasing;
-   `RuleBasedNLU` is the keyword fallback. Prompts live in `prompts.py`.
+   legality). `SlmNLU` calls llama.cpp to turn an utterance into a *list* of
+   intent objects (so "give me black and make it harder" becomes two) plus answer
+   phrasing; `RuleBasedNLU` is the keyword fallback (it splits compounds on
+   conjunctions). The pipeline just dispatches whatever list comes back. Prompts
+   live in `prompts.py`.
 
 4. **`voice/`** — speech I/O. STT/TTS/audio with all heavy deps imported lazily,
    so the package loads even where faster-whisper/kokoro/sounddevice aren't
@@ -59,9 +67,10 @@ motor-state bookkeeping on the host and no concurrency to reason about.
 
 3B models are great at language and unreliable at multi-step chess reasoning. So:
 
-- **Understanding:** the SLM emits a tiny JSON intent. Even if it hallucinates a
-  move, `parse_move` validates it against `board.legal_moves` before anything
-  moves. Bad JSON → rule-based fallback.
+- **Understanding:** the SLM emits a small JSON list of intents. The move itself
+  is resolved from the user's literal words first (`parse_move`, legality-filtered)
+  and the SLM's move field is only a fallback — so a hallucinated or wrong-color
+  move can't be played. Bad JSON → rule-based fallback.
 - **Truth:** material, evaluation, and best moves are computed by Stockfish +
   python-chess and handed to the SLM as *facts*. The phrasing prompt forbids
   inventing numbers or moves.

@@ -2,7 +2,7 @@
 
 `GameState` wraps a python-chess board with the bits the application needs
 (whose turn, machine color, history, game-over text). `classify_move` turns a
-legal move into the physical operations the gantry must perform — this is the
+legal move into the physical operations the crane must perform — this is the
 bridge between chess rules and the motion choreography.
 """
 from __future__ import annotations
@@ -210,7 +210,7 @@ def speak_san(san: str) -> str:
     if core and core[0] in _PIECE_WORDS:
         piece = _PIECE_WORDS[core[0]]
         core = core[1:]
-
+    
     takes = "takes" in core or "x" in core
     dest = core.replace("x", "").strip()
     # Leftover leading file/rank is a disambiguator (e.g. "Rad1") — read it out.

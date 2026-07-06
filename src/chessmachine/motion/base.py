@@ -3,6 +3,10 @@
 A backend exposes only low-level primitives (home / move / pulley / magnet).
 All chess-aware sequencing lives in `choreography.Choreographer`, so swapping
 ESP32-over-serial for a mock (or a future transport) changes nothing upstream.
+
+Positions are planar (x,z) millimetres in the crane-pivot frame; a backend may
+realize them however it likes (the serial backend converts to polar radial +
+rotary axes for the crane).
 """
 from __future__ import annotations
 
@@ -20,11 +24,11 @@ class MotionController(ABC):
 
     @abstractmethod
     def home(self) -> None:
-        """Home all axes against their endstops; defines (0,0) and zero height."""
+        """Home all axes against their endstops; defines the zero reference."""
 
     @abstractmethod
-    def move_xz(self, x_mm: float, z_mm: float, feed: int | None = None) -> None:
-        """Move the gantry to (x,z) in mm. Blocks until the move completes."""
+    def move_xz(self, x_mm: float, z_mm: float, feed: Optional[int] = None) -> None:
+        """Move the head to planar (x,z) mm (pivot frame). Blocks until done."""
 
     @abstractmethod
     def set_pulley(self, height_mm: float, feed: int | None = None) -> None:
@@ -36,7 +40,8 @@ class MotionController(ABC):
 
     @abstractmethod
     def status(self) -> dict:
-        """Return {x, z, height, magnet, ...} as reported by the controller."""
+        """Return controller state as a dict (mock: x/z; serial: r/a + height,
+        magnet, endstops)."""
 
     def estop(self) -> None:
         """Emergency stop. Backends should override; default is a no-op."""

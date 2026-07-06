@@ -22,7 +22,7 @@ def test_deep_merge(tmp_path):
     assert c.motion.geometry.square_pitch_mm == 20.0
     # untouched values keep their defaults
     assert c.app.auto_reply is True
-    assert c.motion.geometry.origin_x_mm == 10.0
+    assert c.motion.geometry.origin_x_mm == 91.875
 
 
 def test_partial_preset_override(tmp_path):
@@ -30,7 +30,7 @@ def test_partial_preset_override(tmp_path):
     p.write_text("engine:\n  presets:\n    easy:\n      elo: 600\n", encoding="utf-8")
     c = load_config(p)
     assert c.engine.presets["easy"].elo == 600
-    assert c.engine.presets["easy"].skill == 3       # other easy fields preserved
+    assert c.engine.presets["easy"].skill == 6       # other easy fields preserved (default)
     assert c.engine.presets["medium"].elo == 1500    # other presets preserved
 
 

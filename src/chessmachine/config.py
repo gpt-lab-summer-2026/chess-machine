@@ -99,11 +99,12 @@ class EngineConfig:
     threads: int = 2
     hash_mb: int = 256
     default_difficulty: str = "medium"
+    allow_random_fallback: bool = False      # dev: fall back to RandomEngine if no Stockfish
     presets: dict[str, DifficultyPreset] = field(
         default_factory=lambda: {
-            "easy": DifficultyPreset(elo=800, depth=6, movetime_ms=300, skill=3),
-            "medium": DifficultyPreset(elo=1500, depth=12, movetime_ms=800, skill=10),
-            "hard": DifficultyPreset(elo=2400, depth=18, movetime_ms=1500, skill=20),
+            "easy": DifficultyPreset(elo=800, depth=6, movetime_ms=600, skill=6),
+            "medium": DifficultyPreset(elo=1500, depth=12, movetime_ms=1100, skill=10),
+            "hard": DifficultyPreset(elo=2400, depth=18, movetime_ms=1800, skill=20),
         }
     )
 
@@ -122,14 +123,22 @@ class SerialConfig:
 
 @dataclass
 class GeometryConfig:
-    # Origin = (X,Z) of the center of square a1, measured from the homed corner.
-    # Defaults assume 150 mm linear-motor stroke: a 120 mm PLAYABLE 8x8 grid
-    # (15 mm squares) plus a ~30 mm storage strip, all within reach. See docs/DESIGN.md.
-    origin_x_mm: float = 10.0
-    origin_z_mm: float = 10.0
-    square_pitch_mm: float = 15.0     # 120 mm playable grid / 8 squares
-    board_size_mm: float = 120.0      # playable area; physical board incl. storage ~150
-    # Which physical axis the files (a..h) and ranks (1..8) run along.
+    # Coordinates are planar (X,Z) millimetres in a frame whose ORIGIN IS THE
+    # CRANE PIVOT. The transport (serial_esp32) converts each (x,z) to polar
+    # (r=hypot, theta=atan2) for the rotary base + radial railcart. The reachable
+    # workspace is an annular sector: r in [r_min_mm, r_max_mm], swept by rotation.
+    r_min_mm: float = 80.0            # inner reachable radius (crane body dead zone)
+    r_max_mm: float = 300.0           # arm / railcart maximum reach
+    # Board: a square centered on the sector bisector (+X axis), near edge at
+    # r_min. 190 mm side -> far corners reach ~286 mm, sweep ~100deg. See docs/DESIGN.md.
+    square_pitch_mm: float = 23.75    # 190 mm board / 8 squares
+    board_size_mm: float = 190.0      # physical 8x8 side
+    # Origin = (X,Z) of the center of square a1. Default places the board square
+    # symmetric about the bisector with its near edge at r_min:
+    #   a1 = (r_min + pitch/2, -board/2 + pitch/2) = (91.875, -83.125).
+    origin_x_mm: float = 91.875
+    origin_z_mm: float = -83.125
+    # Which physical (planar) axis the files (a..h) and ranks (1..8) run along.
     file_axis: str = "x"              # "x" or "z"
     rank_axis: str = "z"              # the other one
     invert_file: bool = False         # flip a..h direction
@@ -137,21 +146,20 @@ class GeometryConfig:
     # Pulley (vertical) travel.
     travel_height_mm: float = 60.0    # cable retracted: clears the tallest piece
     pick_height_mm: float = 4.0       # cable lowered: magnet contacts a piece
-    # Off-board storage for captured pieces (a.k.a. graveyard): a strip beside
-    # the grid, still inside the 150 mm reach. 2 columns x 8 rows = 16 slots
-    # ("2 per row"). A full board reset needs 32 slots, so with 16 the machine
-    # asks for a manual reset (see Choreographer.setup_starting_position).
-    graveyard_x_mm: float = 127.5
-    graveyard_z_start_mm: float = 10.0
-    graveyard_z_pitch_mm: float = 15.0
-    graveyard_x_pitch_mm: float = 15.0
-    graveyard_slots_per_column: int = 8
-    graveyard_columns: int = 2
+    # Off-board storage (graveyard): two symmetric arcs in the leftover sector,
+    # at a radius beyond the board's ~286 mm far corners (so any arc out here
+    # clears the board entirely). 2 sides x 8 = 16 slots. A full reset needs 32
+    # slots, so with 16 the machine asks for a manual reset (see
+    # Choreographer.setup_starting_position).
+    graveyard_radius_mm: float = 293.0   # within r_max, beyond the board corners
+    graveyard_slots_per_side: int = 8
+    graveyard_inner_deg: float = 26.0    # slot angle nearest the bisector
+    graveyard_outer_deg: float = 49.0    # slot angle nearest the sector edge
 
 
 @dataclass
 class SpeedsConfig:
-    travel_feed: int = 4000           # mm/min, XZ gantry moves
+    travel_feed: int = 4000           # mm/min, radial axis feed for head moves
     lift_feed: int = 1500             # mm/min, pulley up/down
     settle_ms: int = 250              # pause after a move to damp cable swing
 
@@ -179,6 +187,8 @@ class AppConfig:
     auto_reply: bool = True           # auto-make the engine move after opponent's
     confirm_moves: bool = True        # speak each move as it is executed
     require_legal_confirmation: bool = True  # re-ask on illegal/ambiguous moves
+    concurrent_actuation: bool = True  # speak the move/explanation while the crane moves
+    match_clock: bool = True          # track the human's thinking time (their clock only)
     log_level: str = "INFO"
 
 

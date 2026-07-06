@@ -99,15 +99,67 @@ def test_undo_takes_back():
     assert len(m.game.history) == 0
 
 
-def test_undo_takes_back_autoreply_pair():
-    # With auto-reply a turn is two plies; "undo" should take back the whole
-    # turn and hand the move back to the human, not leave the game mid-turn.
+def test_opponent_move_prefers_transcript_over_hallucinated_slm_move():
+    # Playing Black, the SLM hallucinates a White move (illegal now) in `move`.
+    # The user's literal transcript must win, so their real move still registers
+    # and the machine auto-replies.
+    from chessmachine.nlu.intents import Intent
+    m, _ = make(auto_reply=True, play_as="white")   # machine opened as White
+    assert m.game.turn() == chess.BLACK and len(m.game.history) == 1
+    m.nlu.interpret = lambda t, c: [Intent("opponent_move", move="e2e4", text="e5")]
+    m.handle("e5")
+    assert m.game.history[1][1] == "e5"              # the real Black move was played
+    assert len(m.game.history) == 3                  # ... and the machine auto-replied
+
+
+def test_set_side_switches_color_midgame():
+    # Default: machine plays black (user is white). Mid-game the user hands the
+    # white side to the machine; it should adopt white AND move immediately.
     m, _ = make(auto_reply=True, play_as="black")
-    m.handle("e4")
-    assert len(m.game.history) == 2          # human white + machine black
+    assert m.machine_color == chess.BLACK
+    m.handle("you take white")
+    assert m.machine_color == chess.WHITE
+    assert m.game.machine_color == chess.WHITE
+    # it was white to move and the machine is now white -> it played a ply
+    assert len(m.game.history) == 1
+
+
+def test_switch_sides_swaps_and_takes_the_turn():
+    # "switch sides" hands the side-to-move (White, on a fresh board) to the machine.
+    m, _ = make(auto_reply=True, play_as="black")
+    m.handle("switch sides")
+    assert m.machine_color == chess.WHITE
+    assert len(m.game.history) == 1       # machine took White's move
+
+
+def test_compound_command_runs_each_clause():
+    # "give me black and set difficulty to hard" must do BOTH, not drop one.
+    m, _ = make(auto_reply=True, play_as="black")
+    assert m.machine_color == chess.BLACK and m.difficulty == "medium"
+    m.handle("give me black and set difficulty to hard")
+    assert m.machine_color == chess.WHITE     # user wants black -> machine plays white
+    assert m.difficulty == "hard"
+
+
+def test_set_side_to_current_color_is_noop():
+    m, tts = make(auto_reply=True, play_as="black")
+    m.handle("you play black")            # already Black
+    assert m.machine_color == chess.BLACK
+    assert len(m.game.history) == 0       # nothing happened
+    assert any("already" in l.lower() for l in tts.lines)
+
+
+def test_undo_takes_back_full_move_pair():
+    # With the machine auto-replying, "undo" should reverse BOTH its reply and
+    # the user's move, handing the move back to the user.
+    import chess
+    m, _ = make(auto_reply=True)
+    m.handle("e4")                       # user e4 + machine's auto-reply = 2 plies
+    assert len(m.game.history) == 2
     m.handle("undo")
     assert len(m.game.history) == 0
-    assert m.game.turn() == chess.WHITE       # human to move again
+    assert m.game.board == chess.Board()
+    assert m.game.turn() == chess.WHITE   # user (White) is back on move
 
 
 def test_engine_move_refuses_when_not_machine_turn():
@@ -143,20 +195,6 @@ def test_capture_aborts_cleanly_when_storage_full():
     m.handle("exd5")
     assert len(m.game.history) == n_before    # capture NOT applied (no desync)
     assert any("storage" in l.lower() for l in tts.lines)
-
-
-def test_new_game_default_storage_is_honest():
-    # On the 16-slot reference hardware a full reset can't be staged, so the
-    # machine must NOT claim the board is reset — it asks for a manual setup.
-    m, tts = make(auto_reply=False)
-    m.handle("e4"); m.handle("d5")
-    m.handle("new game")          # asks to confirm first
-    tts.lines.clear()
-    m.handle("yes")               # confirm -> attempts the reset
-    spoken = " ".join(tts.lines).lower()
-    assert "by hand" in spoken
-    assert "the board is reset" not in spoken
-    assert m.game.board == chess.Board()      # logical board still resets
 
 
 def test_new_game_clears_stale_storage():
@@ -219,3 +257,27 @@ def test_opponent_move_prefers_spoken_text_over_slm_guess():
     m.nlu.interpret = fake_interpret
     m.handle("whatever whisper produced")
     assert m.game.history and m.game.history[0][1] == "Nf3"
+
+
+def test_difficulty_by_elo_number():
+    # A numeric difficulty ("set difficulty to 1200") is synthesized via
+    # preset_from_elo; regression for the missing import that made it crash.
+    m, tts = make(auto_reply=False)
+    m.handle("set difficulty to 1200")
+    assert m.difficulty == "1200 Elo"
+    assert any("1200" in l for l in tts.lines)
+
+
+def test_actuation_failure_is_surfaced_not_swallowed():
+    # If the crane fails mid-move on the worker thread, the machine must warn the
+    # user (the logical move is already applied) instead of silently desyncing.
+    from chessmachine.motion.choreography import ExecutionReport
+    from chessmachine.chess_engine.game import MoveKind
+
+    m, tts = make(auto_reply=False)               # concurrent_actuation defaults True
+    def boom():
+        raise RuntimeError("motor jam")
+    m.choreo.begin_move = lambda b, mv: (boom, ExecutionReport(kind=MoveKind.NORMAL))
+    m.handle("e4")
+    assert m.game.history[-1][1] == "e4"          # move applied logically (no rollback)
+    assert any("check the board" in l.lower() for l in tts.lines)

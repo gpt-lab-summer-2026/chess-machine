@@ -6,6 +6,9 @@ app:
   play_as: black            # color the MACHINE plays: white | black
   auto_reply: true          # after the opponent's move, immediately make ours
   confirm_moves: true       # speak each move as it is executed
+  concurrent_actuation: true # speak the move + explanation while the crane moves
+                             # (a capture's discard always finishes first)
+  match_clock: true         # track the human's thinking time only (ask "status"/"score")
   log_level: INFO
 
 audio:
@@ -45,7 +48,9 @@ slm:
 
 engine:
   backend: stockfish        # stockfish | random (dev/fallback)
-  stockfish_path: stockfish # path or command on PATH
+  stockfish_path: stockfish # bare command -> auto-detected on PATH and in the
+                            # usual winget/scoop/apt/brew locations. Set an
+                            # absolute path only to override that.
   threads: 2
   hash_mb: 256
   default_difficulty: medium
@@ -61,25 +66,28 @@ motion:
     baud: 115200
     timeout_s: 5.0
   geometry:
-    # 150 mm linear-motor stroke: a 120 mm playable 8x8 grid + a storage strip,
-    # all within reach. See docs/DESIGN.md for the geometry budget.
-    # Origin = center of square a1, measured from the homed (0,0) corner.
-    origin_x_mm: 10.0
-    origin_z_mm: 10.0
-    square_pitch_mm: 15.0   # 120 mm playable grid / 8
+    # Planar (x,z) mm with the ORIGIN AT THE CRANE PIVOT; the serial transport
+    # converts to polar (r=hypot, theta=atan2) for the rotary + radial axes.
+    # See docs/DESIGN.md for the annular-sector geometry budget.
+    r_min_mm: 80.0          # inner reachable radius (crane body dead zone)
+    r_max_mm: 300.0         # arm / railcart maximum reach
+    board_size_mm: 190.0    # square 8x8 side (<= ~202 max for this annulus)
+    square_pitch_mm: 23.75  # 190 mm board / 8
+    # Origin = center of a1 (near edge at r_min, board centered on the bisector).
+    origin_x_mm: 91.875
+    origin_z_mm: -83.125
     file_axis: x            # files a..h run along this axis (x|z)
     rank_axis: z            # ranks 1..8 run along this axis
     invert_file: false
     invert_rank: false
     travel_height_mm: 60.0  # pulley raised: clears pieces AND decouples magnetically
     pick_height_mm: 4.0     # pulley lowered: magnet touches a piece
-    # Captured-piece storage: a 2-column strip beside the grid, within 150 mm reach.
-    graveyard_x_mm: 127.5
-    graveyard_z_start_mm: 10.0
-    graveyard_z_pitch_mm: 15.0
-    graveyard_x_pitch_mm: 15.0
-    graveyard_slots_per_column: 8
-    graveyard_columns: 2    # 2 x 8 = 16 slots ("2 per row")
+    # Captured-piece storage: two symmetric arcs in the leftover sector, beyond
+    # the board's ~286 mm far corners. 2 sides x 8 = 16 slots.
+    graveyard_radius_mm: 293.0
+    graveyard_slots_per_side: 8
+    graveyard_inner_deg: 26.0
+    graveyard_outer_deg: 49.0
   speeds:
     travel_feed: 4000       # mm/min
     lift_feed: 1500

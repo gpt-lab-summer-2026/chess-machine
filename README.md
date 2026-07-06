@@ -2,9 +2,9 @@
 
 A voice-controlled, self-actuating chess board. You speak; the machine listens,
 talks back, decides on a move (consulting Stockfish at the chosen difficulty),
-and physically moves the magnetic pieces with a gantry + electromagnet on a
-pulley. It runs entirely onboard a Raspberry Pi 5, with an ESP32 driving the
-motors.
+and physically moves the magnetic pieces with a polar crane (rotary base +
+railcart) + electromagnet on a pulley. It runs entirely onboard a Raspberry
+Pi 5, with an ESP32 driving the motors.
 
 ```
  mic ─▶ distil-whisper (STT) ─▶ llama.cpp 3B SLM ─▶ intent (JSON)

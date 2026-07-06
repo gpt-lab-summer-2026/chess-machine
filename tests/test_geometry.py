@@ -1,47 +1,75 @@
+import math
+
+import chess
 import pytest
 
 from chessmachine.config import GeometryConfig
 from chessmachine.motion.geometry import BoardGeometry, Point
 
 
+def _r(p: Point) -> float:
+    return math.hypot(p.x, p.z)
+
+
+def _on_board(cfg: GeometryConfig, p: Point) -> bool:
+    """True if a planar point lies within the 8x8 board square."""
+    near, far = cfg.r_min_mm, cfg.r_min_mm + cfg.board_size_mm
+    half = cfg.board_size_mm / 2.0
+    return near <= p.x <= far and -half <= p.z <= half
+
+
 def test_a1_is_origin():
     geo = BoardGeometry(GeometryConfig())
-    assert geo.name_to_point("a1") == Point(10.0, 10.0)
+    assert geo.name_to_point("a1") == Point(91.875, -83.125)
 
 
 def test_square_pitch():
-    geo = BoardGeometry(GeometryConfig())  # pitch 15.0, file->x, rank->z
-    assert geo.name_to_point("h1") == Point(10.0 + 7 * 15.0, 10.0)
-    assert geo.name_to_point("a8") == Point(10.0, 10.0 + 7 * 15.0)
-    assert geo.name_to_point("h8") == Point(10.0 + 7 * 15.0, 10.0 + 7 * 15.0)
-    # the whole grid stays within the 150 mm linear-motor stroke
-    assert geo.name_to_point("h8").x <= 150.0 and geo.name_to_point("h8").z <= 150.0
+    geo = BoardGeometry(GeometryConfig())  # pitch 23.75, file->x, rank->z
+    assert geo.name_to_point("h1") == Point(91.875 + 7 * 23.75, -83.125)
+    assert geo.name_to_point("a8") == Point(91.875, -83.125 + 7 * 23.75)
+    assert geo.name_to_point("h8") == Point(91.875 + 7 * 23.75, -83.125 + 7 * 23.75)
+
+
+def test_every_square_is_inside_the_reachable_sector():
+    cfg = GeometryConfig()
+    geo = BoardGeometry(cfg)
+    for sq in chess.SQUARES:
+        p = geo.square_to_point(sq)
+        assert cfg.r_min_mm <= _r(p) <= cfg.r_max_mm        # within the annulus
+        assert abs(math.degrees(math.atan2(p.z, p.x))) < 55.0  # within the sweep
 
 
 def test_invert_file():
     geo = BoardGeometry(GeometryConfig(invert_file=True))
     # a-file now sits at the far end of the x-axis
-    assert geo.name_to_point("a1") == Point(10.0 + 7 * 15.0, 10.0)
-    assert geo.name_to_point("h1") == Point(10.0, 10.0)
+    assert geo.name_to_point("a1") == Point(91.875 + 7 * 23.75, -83.125)
+    assert geo.name_to_point("h1") == Point(91.875, -83.125)
 
 
 def test_axis_swap():
     geo = BoardGeometry(GeometryConfig(file_axis="z", rank_axis="x"))
     # files now run along z, ranks along x
-    assert geo.name_to_point("a1") == Point(10.0, 10.0)
-    assert geo.name_to_point("h1") == Point(10.0, 10.0 + 7 * 15.0)
-    assert geo.name_to_point("a8") == Point(10.0 + 7 * 15.0, 10.0)
+    assert geo.name_to_point("a1") == Point(91.875, -83.125)
+    assert geo.name_to_point("h1") == Point(91.875, -83.125 + 7 * 23.75)
+    assert geo.name_to_point("a8") == Point(91.875 + 7 * 23.75, -83.125)
 
 
-def test_graveyard_slots_within_reach():
-    geo = BoardGeometry(GeometryConfig())  # 2 columns x 8 rows = 16 ("2 per row")
+def test_graveyard_arcs_are_reachable_and_off_board():
+    cfg = GeometryConfig()
+    geo = BoardGeometry(cfg)
     slots = geo.graveyard_slots()
-    assert len(slots) == 16
-    assert slots[0] == Point(127.5, 10.0)
-    assert slots[1] == Point(127.5, 25.0)         # next row, z + pitch
-    assert slots[8] == Point(127.5 + 15.0, 10.0)  # next column, x + pitch
-    # storage must also fit inside the 150 mm stroke
-    assert all(s.x <= 150.0 and s.z <= 150.0 for s in slots)
+    assert len(slots) == 16                       # 2 sides x 8
+
+    # first slot: positive side, inner angle, at the configured radius
+    inner = math.radians(cfg.graveyard_inner_deg)
+    assert slots[0].x == pytest.approx(cfg.graveyard_radius_mm * math.cos(inner))
+    assert slots[0].z == pytest.approx(cfg.graveyard_radius_mm * math.sin(inner))
+    # second side mirrors below the bisector
+    assert slots[8].z == pytest.approx(-slots[0].z)
+
+    for s in slots:
+        assert cfg.r_min_mm <= _r(s) <= cfg.r_max_mm   # reachable
+        assert not _on_board(cfg, s)                    # clears the board
 
 
 def test_invalid_axes_rejected():
