@@ -259,6 +259,28 @@ def test_opponent_move_prefers_spoken_text_over_slm_guess():
     assert m.game.history and m.game.history[0][1] == "Nf3"
 
 
+def test_ambiguous_transcript_disambiguated_by_slm_move():
+    # Two white knights (b5, f5) both reach d4, so the spoken "knight to d4" is
+    # ambiguous on its own. The SLM's full-coordinate move picks one, and since
+    # it's one of the spoken candidates we play it instead of re-asking.
+    m, _ = make(auto_reply=False)                 # human is White, machine Black
+    m.game.reset(start_fen="4k3/8/8/1N3N2/8/8/8/4K3 w - - 0 1")
+    m.nlu.interpret = lambda t, c: [Intent("opponent_move", move="b5d4", text="knight to d4")]
+    m.handle("knight to d4")
+    assert m.game.history and m.game.history[-1][1] == "Nbd4"
+
+
+def test_ambiguous_transcript_without_slm_help_still_asks():
+    # Same ambiguous position, but the SLM offers no usable move -> we must still
+    # ask the user to clarify rather than guessing.
+    m, tts = make(auto_reply=False)
+    m.game.reset(start_fen="4k3/8/8/1N3N2/8/8/8/4K3 w - - 0 1")
+    m.nlu.interpret = lambda t, c: [Intent("opponent_move", move=None, text="knight to d4")]
+    m.handle("knight to d4")
+    assert not m.game.history
+    assert any("ambiguous" in l.lower() for l in tts.lines)
+
+
 def test_difficulty_by_elo_number():
     # A numeric difficulty ("set difficulty to 1200") is synthesized via
     # preset_from_elo; regression for the missing import that made it crash.

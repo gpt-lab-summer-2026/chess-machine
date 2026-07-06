@@ -241,6 +241,14 @@ class ChessMachine:
                     break
         if not candidates:
             return self._say("move not readable. say it again please")
+        # If the spoken form was ambiguous (e.g. "knight to f6" with two knights
+        # that reach f6), let the SLM's structured move break the tie — but only
+        # when it resolves to exactly one of the candidates we already found, so
+        # a hallucinated or wrong-color move can't slip in.
+        if len(candidates) > 1 and intent.move:
+            slm_moves = parse_move(intent.move, board)
+            if len(slm_moves) == 1 and slm_moves[0] in candidates:
+                candidates = slm_moves
         if len(candidates) > 1:
             return self._say(f"ambiguous move: did you mean "
                              f"{describe_candidates(candidates, board)}?")
