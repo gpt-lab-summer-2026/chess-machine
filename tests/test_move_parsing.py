@@ -1,7 +1,7 @@
 import chess
 import pytest
 
-from chessmachine.nlu.move_parsing import normalize_spoken, parse_move
+from chessmachine.nlu.move_parsing import explain_move_failure, normalize_spoken, parse_move
 
 
 def ucis(text, board=None):
@@ -62,3 +62,34 @@ def test_nonsense_and_illegal_return_empty():
 def test_normalize_spoken():
     assert normalize_spoken("Knight to E, four") == "knight to e4"
     assert normalize_spoken("echo four") == "e4"
+
+
+def test_explain_illegal_jump_suggests_real_moves():
+    msg = explain_move_failure("e2 to e5", chess.Board()).lower()
+    assert "e5" in msg and "can't reach" in msg
+    assert "e3" in msg and "e4" in msg               # the pawn's real options
+
+
+def test_explain_no_piece_on_source():
+    msg = explain_move_failure("e3 to e4", chess.Board()).lower()   # e3 is empty
+    assert "no piece on e3" in msg
+
+
+def test_explain_wrong_colour_piece():
+    msg = explain_move_failure("e7 to e5", chess.Board()).lower()   # e7 is black's
+    assert "white" in msg and "black" in msg
+
+
+def test_explain_into_check():
+    # White bishop e2 is pinned to its king by the black rook on e8.
+    b = chess.Board("4r2k/8/8/8/8/8/4B3/4K3 w - - 0 1")
+    assert "check" in explain_move_failure("e2 to d3", b).lower()
+
+
+def test_explain_unreachable_destination():
+    assert "a5" in explain_move_failure("a5", chess.Board()).lower()  # nothing reaches a5
+
+
+def test_explain_no_squares_gives_a_hint():
+    msg = explain_move_failure("do a barrel roll", chess.Board()).lower()
+    assert "couldn't read" in msg or "target square" in msg

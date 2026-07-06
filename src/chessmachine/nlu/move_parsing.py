@@ -167,3 +167,46 @@ def _resolve(candidates: list[chess.Move], board: chess.Board,
 def describe_candidates(moves: list[chess.Move], board: chess.Board) -> str:
     """Human-readable list of candidate moves for a clarification prompt."""
     return ", ".join(board.san(m) for m in moves)
+
+
+def explain_move_failure(text: str, board: chess.Board) -> str:
+    """Explain why a spoken move can't be played, suggesting alternatives where
+    possible. Used when `parse_move` finds nothing legal, so the machine can say
+    *why* instead of a bare "say it again"."""
+    t = normalize_spoken(text)
+    squares = _SQUARE_RE.findall(t)
+
+    def _dests(sq: int) -> list[str]:
+        return sorted(board.san(m) for m in board.legal_moves if m.from_square == sq)
+
+    if len(squares) >= 2:
+        frm, to = chess.parse_square(squares[0]), chess.parse_square(squares[1])
+        piece = board.piece_at(frm)
+        if piece is None:
+            return f"There's no piece on {squares[0]} to move."
+        if piece.color != board.turn:
+            mover = "white" if board.turn == chess.WHITE else "black"
+            owner = "white" if piece.color == chess.WHITE else "black"
+            return f"It's {mover}'s move, but {squares[0]} holds {owner}'s piece."
+        name = chess.piece_name(piece.piece_type)
+        promo = (chess.QUEEN if piece.piece_type == chess.PAWN
+                 and chess.square_rank(to) in (0, 7) else None)
+        candidate = chess.Move(frm, to, promotion=promo)
+        if board.is_pseudo_legal(candidate):
+            reason = f"moving the {name} to {squares[1]} would leave the king in check"
+        else:
+            reason = f"the {name} on {squares[0]} can't reach {squares[1]}"
+        dests = _dests(frm)
+        if dests:
+            return f"That move isn't legal: {reason}. It can go to {', '.join(dests)}."
+        return f"That move isn't legal: {reason}, and it has nowhere legal to go."
+
+    if len(squares) == 1:
+        to = chess.parse_square(squares[0])
+        reachers = sorted(board.san(m) for m in board.legal_moves if m.to_square == to)
+        if not reachers:
+            return f"Nothing can legally move to {squares[0]} right now. Say it again?"
+        return f"Did you mean {', '.join(reachers)}?"
+
+    return ("I couldn't read that as a move. Try the target square, like "
+            "'e4', 'knight to f3', or 'e2 to e4'.")

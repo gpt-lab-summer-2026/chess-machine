@@ -52,11 +52,13 @@ def test_no_autoreply_plays_single_ply():
     assert len(m.game.history) == 1
 
 
-def test_illegal_move_asks_to_repeat():
+def test_illegal_move_is_explained():
     m, tts = make(auto_reply=False)
     m.handle("e2 to e5")          # illegal jump
     assert len(m.game.history) == 0
-    assert any("again" in l.lower() for l in tts.lines)
+    spoken = " ".join(tts.lines).lower()
+    assert "isn't legal" in spoken               # says why, not a bare re-ask
+    assert "e3" in spoken and "e4" in spoken     # ... and offers the pawn's real moves
 
 
 def test_scholars_mate_announced():
@@ -96,6 +98,22 @@ def test_undo_takes_back():
     m.handle("e4")
     assert len(m.game.history) == 1
     m.handle("undo")
+    m.handle("yes")              # confirm the take-back
+    assert len(m.game.history) == 0
+
+
+def test_undo_requires_confirmation():
+    m, tts = make(auto_reply=False)
+    m.handle("e4")
+    tts.lines.clear()
+    m.handle("undo")                       # should ASK, not take back
+    assert len(m.game.history) == 1        # nothing undone yet
+    assert any("yes" in l.lower() for l in tts.lines)
+    m.handle("no, keep it")                # decline
+    assert len(m.game.history) == 1        # move still there
+    assert m.game.history[0][1] == "e4"
+    m.handle("undo")
+    m.handle("yes")                        # confirm this time
     assert len(m.game.history) == 0
 
 
@@ -169,6 +187,7 @@ def test_undo_takes_back_full_move_pair():
     m.handle("e4")                       # user e4 + machine's auto-reply = 2 plies
     assert len(m.game.history) == 2
     m.handle("undo")
+    m.handle("yes")                      # confirm the take-back
     assert len(m.game.history) == 0
     assert m.game.board == chess.Board()
     assert m.game.turn() == chess.WHITE   # user (White) is back on move

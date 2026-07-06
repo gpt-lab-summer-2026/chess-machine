@@ -7,7 +7,12 @@ are resolved by `move_parsing` against python-chess and by the engine.
 from .base import NLU
 from .factory import create_nlu
 from .intents import ACTIONS, Intent, intent_from_json
-from .move_parsing import describe_candidates, normalize_spoken, parse_move
+from .move_parsing import (
+    describe_candidates,
+    explain_move_failure,
+    normalize_spoken,
+    parse_move,
+)
 from .rule_based import resolve_side_request
 
 __all__ = [
@@ -18,6 +23,7 @@ __all__ = [
     "parse_move",
     "normalize_spoken",
     "describe_candidates",
+    "explain_move_failure",
     "resolve_side_request",
     "create_nlu",
 ]

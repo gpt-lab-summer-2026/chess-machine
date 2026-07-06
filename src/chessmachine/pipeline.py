@@ -20,7 +20,13 @@ from .chess_engine.game import speak_san
 from .clock import MatchClock
 from .config import Config, DifficultyPreset, preset_from_elo
 from .motion import Choreographer
-from .nlu import NLU, describe_candidates, parse_move, resolve_side_request
+from .nlu import (
+    NLU,
+    describe_candidates,
+    explain_move_failure,
+    parse_move,
+    resolve_side_request,
+)
 from .nlu.intents import Intent
 from .voice.stt import STT
 from .voice.tts import TTS
@@ -131,11 +137,14 @@ class ChessMachine:
         return " ".join(replies)
 
     def _resolve_pending(self, transcript: str) -> str:
-        """Resolve a yes/no answer to a pending confirmation (e.g. a new game)."""
+        """Resolve a yes/no answer to a pending confirmation (new game or undo)."""
         pending, self._pending = self._pending, None
-        if _is_affirmative(transcript) and pending == "new_game":
-            return self._really_new_game()
-        return self._say("Okay, keeping the current game.")
+        if _is_affirmative(transcript):
+            if pending == "undo":
+                return self._really_undo()
+            return self._really_new_game()          # pending == "new_game"
+        return self._say("Okay, keeping the move." if pending == "undo"
+                         else "Okay, keeping the current game.")
 
     def _dispatch(self, intent: Intent) -> str:
         a = intent.action
@@ -251,7 +260,7 @@ class ChessMachine:
                 if candidates:
                     break
         if not candidates:
-            return self._say("move not readable. say it again please")
+            return self._say(explain_move_failure(intent.text or intent.move or "", board))
         # If the spoken form was ambiguous (e.g. "knight to f6" with two knights
         # that reach f6), let the SLM's structured move break the tie — but only
         # when it resolves to exactly one of the candidates we already found, so
@@ -298,6 +307,13 @@ class ChessMachine:
         return spoken
 
     def _do_undo(self) -> str:
+        # A take-back discards the position, so confirm first — like a new game.
+        if not self.game.board.move_stack:
+            return self._say("There's no move to take back.")
+        self._pending = "undo"
+        return self._say("Take back the last move? Say yes to confirm.")
+
+    def _really_undo(self) -> str:
         first = self.game.undo()
         if first is None:
             return self._say("There's no move to take back.")
