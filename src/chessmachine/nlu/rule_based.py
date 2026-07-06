@@ -38,13 +38,16 @@ _MACHINE_SUBJECT = ("you ", "you're", "youre", "your", "you'll", "youll", "you p
                     "you take", "you be")
 
 
-def _side_request(t: str) -> str | None:
+def resolve_side_request(text: str) -> str | None:
     """Resolve a side-change request to the MACHINE's target color.
 
     Returns 'white'/'black' (machine plays it), 'swap' (toggle), or None.
     Perspective: "you play white" -> machine white; "I'll play white" (or just
     "play as white") -> the user wants white, so the machine takes black.
+    Shared with the pipeline so the SLM's error-prone colour perspective can be
+    corrected against what the user literally said.
     """
+    t = text.lower().strip()
     if _has(t, *_SWAP_PHRASES):
         return "swap"
     has_color = "white" in t or "black" in t
@@ -85,7 +88,7 @@ class RuleBasedNLU(NLU):
         if _has(t, "help", "what can you do", "instructions"):
             return Intent("help", text=transcript)
 
-        side = _side_request(t)
+        side = resolve_side_request(t)
         if side is not None:
             return Intent("set_side", color=(None if side == "swap" else side), text=transcript)
 

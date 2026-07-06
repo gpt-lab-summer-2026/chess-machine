@@ -20,7 +20,7 @@ from .chess_engine.game import speak_san
 from .clock import MatchClock
 from .config import Config, DifficultyPreset, preset_from_elo
 from .motion import Choreographer
-from .nlu import NLU, describe_candidates, parse_move
+from .nlu import NLU, describe_candidates, parse_move, resolve_side_request
 from .nlu.intents import Intent
 from .voice.stt import STT
 from .voice.tts import TTS
@@ -184,11 +184,22 @@ class ChessMachine:
         If the switch puts the machine on move, it plays immediately (auto-reply),
         so "you take white from here" hands the turn straight over.
         """
-        color = (intent.color or "").strip().lower()
-        if color in ("white", "black"):
-            new_color = chess.WHITE if color == "white" else chess.BLACK
+        # Resolve the machine's target colour from what the user actually said —
+        # small models routinely flip the perspective on side requests (dropping
+        # the colour the *user* wants where the *machine's* colour belongs, which
+        # lands on the current colour and silently no-ops). Fall back to the
+        # SLM's `color` only when the words don't clearly resolve.
+        side = resolve_side_request(intent.text or "")
+        if side == "swap":
+            new_color = not self.machine_color
+        elif side in ("white", "black"):
+            new_color = chess.WHITE if side == "white" else chess.BLACK
         else:
-            new_color = not self.machine_color    # no/blank color => swap sides
+            color = (intent.color or "").strip().lower()
+            if color in ("white", "black"):
+                new_color = chess.WHITE if color == "white" else chess.BLACK
+            else:
+                new_color = not self.machine_color    # no/blank color => swap sides
         if new_color == self.machine_color:
             return self._say(f"I'm already playing {GameState.color_name(new_color)}.")
 

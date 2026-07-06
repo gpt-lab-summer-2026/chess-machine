@@ -149,6 +149,18 @@ def test_set_side_to_current_color_is_noop():
     assert any("already" in l.lower() for l in tts.lines)
 
 
+def test_set_side_uses_transcript_perspective_over_slm_color():
+    # Small models flip the perspective: the user says "let me play black" (they
+    # want black -> the MACHINE takes white), but the SLM fills color="black" (the
+    # colour the user named). The literal transcript must win, so the machine
+    # switches to white instead of no-opping on its current colour.
+    m, _ = make(auto_reply=True, play_as="black")     # machine starts Black
+    m.nlu.interpret = lambda t, c: [Intent("set_side", color="black", text="let me play black")]
+    m.handle("let me play black")
+    assert m.machine_color == chess.WHITE
+    assert len(m.game.history) == 1                    # switched and opened as White
+
+
 def test_undo_takes_back_full_move_pair():
     # With the machine auto-replying, "undo" should reverse BOTH its reply and
     # the user's move, handing the move back to the user.
