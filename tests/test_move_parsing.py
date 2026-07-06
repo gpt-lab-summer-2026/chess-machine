@@ -93,3 +93,15 @@ def test_explain_unreachable_destination():
 def test_explain_no_squares_gives_a_hint():
     msg = explain_move_failure("do a barrel roll", chess.Board()).lower()
     assert "couldn't read" in msg or "target square" in msg
+
+
+def test_explain_named_piece_that_is_blocked():
+    # Bishops are hemmed in by their own pawns at the start.
+    msg = explain_move_failure("bishop to b5", chess.Board()).lower()
+    assert "bishop" in msg and "can't move anywhere" in msg
+
+
+def test_explain_named_piece_lists_its_real_moves():
+    msg = explain_move_failure("knight to b5", chess.Board()).lower()
+    assert "no knight can reach b5" in msg
+    assert "nc3" in msg and "nf3" in msg          # a knight's real destinations

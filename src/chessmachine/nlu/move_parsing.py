@@ -202,6 +202,20 @@ def explain_move_failure(text: str, board: chess.Board) -> str:
         return f"That move isn't legal: {reason}, and it has nowhere legal to go."
 
     if len(squares) == 1:
+        # If they named a piece, explain from that piece's point of view.
+        piece_type = next((pt for word, pt in _PIECE_WORDS.items()
+                           if re.search(rf"\b{word}\b", t)), None)
+        if piece_type is not None:
+            name = chess.piece_name(piece_type)
+            owned = [sq for sq in chess.SQUARES
+                     if (p := board.piece_at(sq)) is not None
+                     and p.piece_type == piece_type and p.color == board.turn]
+            if not owned:
+                return f"You have no {name} in play to move."
+            dests = sorted(board.san(m) for m in board.legal_moves if m.from_square in owned)
+            if not dests:
+                return f"Your {name} can't move anywhere right now."
+            return f"No {name} can reach {squares[0]}. A {name} can go to {', '.join(dests)}."
         to = chess.parse_square(squares[0])
         reachers = sorted(board.san(m) for m in board.legal_moves if m.to_square == to)
         if not reachers:
