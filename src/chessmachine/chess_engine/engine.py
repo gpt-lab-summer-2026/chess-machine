@@ -6,6 +6,7 @@ Difficulty maps onto Stockfish's Skill Level / UCI_Elo plus a search limit.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import random
@@ -14,7 +15,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from glob import glob
 from pathlib import Path
-from typing import Optional
 
 import chess
 
@@ -33,7 +33,7 @@ def _wellknown_stockfish_paths() -> list[str]:
     home = Path.home()
     if os.name == "nt":
         local = os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local"))
-        program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+        program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
         return [
             # winget (how it's installed on the dev laptops)
             str(Path(local) / "Microsoft" / "WinGet" / "Packages"
@@ -90,11 +90,11 @@ def resolve_stockfish_path(configured: str) -> str:
 @dataclass
 class AnalysisResult:
     """Evaluation normalized to White's point of view."""
-    score_cp: Optional[int] = None       # centipawns, +ve = good for White
-    mate_in: Optional[int] = None        # +ve = White mates, -ve = Black mates
-    best_move: Optional[chess.Move] = None
+    score_cp: int | None = None       # centipawns, +ve = good for White
+    mate_in: int | None = None        # +ve = White mates, -ve = Black mates
+    best_move: chess.Move | None = None
     pv: list[chess.Move] = field(default_factory=list)
-    depth: Optional[int] = None
+    depth: int | None = None
 
 
 class ChessEngine(ABC):
@@ -102,7 +102,7 @@ class ChessEngine(ABC):
     def set_difficulty(self, preset: DifficultyPreset) -> None: ...
 
     @abstractmethod
-    def best_move(self, board: chess.Board) -> Optional[chess.Move]: ...
+    def best_move(self, board: chess.Board) -> chess.Move | None: ...
 
     @abstractmethod
     def analyse(self, board: chess.Board) -> AnalysisResult: ...
@@ -152,7 +152,7 @@ class StockfishEngine(ChessEngine):
     def set_difficulty(self, preset: DifficultyPreset) -> None:
         import chess.engine
 
-        opts: dict[str, object] = {}
+        opts: dict[str, str | int | bool | None] = {}
         if "Skill Level" in self._engine.options:
             opts["Skill Level"] = max(0, min(20, preset.skill))
         if "UCI_LimitStrength" in self._engine.options:
@@ -174,7 +174,7 @@ class StockfishEngine(ChessEngine):
     def provides_evaluation(self) -> bool:
         return True
 
-    def best_move(self, board: chess.Board) -> Optional[chess.Move]:
+    def best_move(self, board: chess.Board) -> chess.Move | None:
         if board.is_game_over():
             return None
         result = self._engine.play(board, self._limit)
@@ -206,10 +206,8 @@ class StockfishEngine(ChessEngine):
         return _analysis_from_info(info)
 
     def close(self) -> None:
-        try:
+        with contextlib.suppress(Exception):  # pragma: no cover - best effort on shutdown
             self._engine.quit()
-        except Exception:  # pragma: no cover - best effort on shutdown
-            pass
 
 
 def _analysis_from_info(info) -> AnalysisResult:
@@ -233,13 +231,13 @@ def _analysis_from_info(info) -> AnalysisResult:
 class RandomEngine(ChessEngine):
     """Plays a random legal move. For dev/CI only — no chess strength."""
 
-    def __init__(self, seed: Optional[int] = None):
+    def __init__(self, seed: int | None = None):
         self._rng = random.Random(seed)
 
     def set_difficulty(self, preset: DifficultyPreset) -> None:
         log.info("RandomEngine ignores difficulty (%s elo)", preset.elo)
 
-    def best_move(self, board: chess.Board) -> Optional[chess.Move]:
+    def best_move(self, board: chess.Board) -> chess.Move | None:
         moves = list(board.legal_moves)
         return self._rng.choice(moves) if moves else None
 

@@ -1,9 +1,9 @@
 """Motion: board geometry, motor-control transports, and move choreography."""
-from .geometry import Point, BoardGeometry
 from .base import MotionController
-from .mock import MockMotion
-from .graveyard import Graveyard
 from .choreography import Choreographer, ExecutionReport
+from .geometry import BoardGeometry, Point
+from .graveyard import Graveyard
+from .mock import MockMotion
 
 __all__ = [
     "Point",

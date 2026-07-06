@@ -8,12 +8,11 @@ chess move.
 from __future__ import annotations
 
 import re
-from typing import Optional
 
-from ..chess_engine.analysis import facts_to_summary
+from ..chess_engine.analysis import PositionFacts, facts_to_summary
 from .base import NLU
 from .intents import Intent
-from .move_parsing import parse_move, normalize_spoken
+from .move_parsing import normalize_spoken, parse_move
 
 _DIFFICULTY_RE = re.compile(r"\b(easy|medium|hard)\b")
 _NUMBER_RE = re.compile(r"\b(\d{3,4})\b")
@@ -39,13 +38,16 @@ _MACHINE_SUBJECT = ("you ", "you're", "youre", "your", "you'll", "youll", "you p
                     "you take", "you be")
 
 
-def _side_request(t: str) -> Optional[str]:
+def resolve_side_request(text: str) -> str | None:
     """Resolve a side-change request to the MACHINE's target color.
 
     Returns 'white'/'black' (machine plays it), 'swap' (toggle), or None.
     Perspective: "you play white" -> machine white; "I'll play white" (or just
     "play as white") -> the user wants white, so the machine takes black.
+    Shared with the pipeline so the SLM's error-prone colour perspective can be
+    corrected against what the user literally said.
     """
+    t = text.lower().strip()
     if _has(t, *_SWAP_PHRASES):
         return "swap"
     has_color = "white" in t or "black" in t
@@ -77,7 +79,7 @@ class RuleBasedNLU(NLU):
 
         if _has(t, "new game", "reset", "start over", "restart", "new match", "set up the board"):
             return Intent("new_game", text=transcript)
-        if _has(t, "undo", "take back", "takeback", "take that back"):
+        if _has(t, "undo", "take back", "takeback", "take that back", "retake", "redo"):
             return Intent("undo", text=transcript)
         if _has(t, "resign", "give up", "concede"):
             return Intent("resign", text=transcript)
@@ -86,12 +88,12 @@ class RuleBasedNLU(NLU):
         if _has(t, "help", "what can you do", "instructions"):
             return Intent("help", text=transcript)
 
-        side = _side_request(t)
+        side = resolve_side_request(t)
         if side is not None:
             return Intent("set_side", color=(None if side == "swap" else side), text=transcript)
 
         if _has(t, "difficulty", "level", "elo") or _DIFFICULTY_RE.search(t):
-            diff: Optional[str] = None
+            diff: str | None = None
             m = _DIFFICULTY_RE.search(t)
             if m:
                 diff = m.group(1)
@@ -120,9 +122,17 @@ class RuleBasedNLU(NLU):
         if _looks_like_move(transcript):
             return Intent("opponent_move", move=transcript, text=transcript)
 
+        # Only a bare pleasantry (the whole utterance is acknowledgement words) is
+        # chitchat; anything with other content stays "unknown" and is re-asked.
+        tokens = set(re.findall(r"[a-z']+", t))
+        if tokens and tokens <= {
+            "okay", "ok", "thanks", "thank", "you", "cool", "nice", "great",
+            "hello", "hi", "hey", "yeah", "yep", "sure",
+        }:
+            return Intent("chitchat", text=transcript)
         return Intent("unknown", text=transcript)
 
-    def phrase_analysis(self, question: str, facts: dict) -> str:
+    def phrase_analysis(self, question: str, facts: PositionFacts) -> str:
         q = (question or "").lower()
         summary = facts_to_summary(facts)
         if "best move" in q and facts.get("best_move_san"):

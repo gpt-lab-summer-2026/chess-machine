@@ -9,7 +9,7 @@ so it must not count against them. See docs / the move-commentary design notes.
 from __future__ import annotations
 
 import time
-from typing import Callable
+from collections.abc import Callable
 
 
 class MatchClock:

@@ -70,6 +70,13 @@ python -m chessmachine --config config/config.yaml
 
 Flash the ESP32 first — see **[firmware/esp32_chess/](firmware/esp32_chess/)**.
 
+## Running on a Windows PC (real voice, no motors)
+
+To run the full mic → whisper → SLM → Stockfish → Kokoro → speaker loop on a
+desktop with motion mocked (no ESP32), see **[docs/SETUP_WINDOWS.md](docs/SETUP_WINDOWS.md)**
+— it covers the voice deps (incl. the `webrtcvad` wheel), a Stockfish binary,
+GPU/CPU `llama-cpp-python`, model downloads (`scripts/fetch_models.ps1`), and config.
+
 ## Voice commands
 
 | You say | Action |
@@ -87,6 +94,12 @@ respect that pairing: **"take that back" undoes the whole turn** (your move *and
 the machine's reply) so it's your move again, and **"your move"** is declined when
 it's actually your turn rather than the machine playing your colour.
 
+Destructive actions confirm first: **"new game"** and **"take that back"** ask for
+a spoken "yes" before doing anything. If a move can't be played, the machine says
+*why* — e.g. *"the pawn on e2 can't reach e5; it can go to e3, e4"* — instead of
+just asking you to repeat. In the voice pipeline the terminal mirrors the
+conversation too: your recognised words (`you> …`) and its replies (`[speaker] …`).
+
 ## Repo layout
 
 ```
@@ -101,19 +114,30 @@ src/chessmachine/
   voice/               distil-whisper STT, Kokoro TTS, mic/VAD capture
 firmware/esp32_chess/  Arduino firmware: steppers + pulley + magnet + protocol
 scripts/               calibrate.py, serial_console.py, fetch_models.sh
-tests/                 pytest suite for the hardware-free core (51 tests)
+tests/                 pytest suite for the hardware-free core (200+ tests)
 docs/                  ARCHITECTURE, HARDWARE, PROTOCOL, SETUP_PI
+.github/workflows/     CI: ruff + mypy + pytest on Python 3.10-3.12
 ```
 
-## Testing
+## Development & testing
+
+Install the dev extras (pytest, ruff, mypy, coverage) and run the same checks CI does:
 
 ```bash
-pip install pytest && python -m pytest      # 51 tests, no hardware needed
+pip install -e ".[dev]"
+python -m pytest            # 200+ tests, no hardware or models needed
+ruff check .                # lint (no autoformatter; lint only)
+mypy src                    # type-check
 ```
 
-Covers config merging, board geometry, move classification, the speech→move
-parser, the full pick-and-place choreography (asserted op-by-op against the mock
-motor), intent routing, and an end-to-end scripted game (including Scholar's mate).
+Tests cover config merging + validation, board geometry, move classification,
+the speech→move parser, position analysis (material, evaluation, move-quality,
+tactics), the pick-and-place choreography (asserted op-by-op against the mock
+motor), the ESP32 serial protocol (against a fake port), the SLM and rule-based
+NLU, intent routing, and an end-to-end scripted game (including Scholar's mate).
+
+[CI](.github/workflows/ci.yml) runs ruff + mypy + pytest on Python 3.10-3.12 on
+every push and pull request.
 
 ## Known limitations
 

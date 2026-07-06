@@ -1,15 +1,20 @@
 """Prompt construction for the SLM (intent classification + answer phrasing)."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..chess_engine.analysis import PositionFacts
 INTENT_SYSTEM = """You control a voice-operated chess robot. Convert the user's \
-utterance into JSON of the form {"actions": [ ... ]} and output nothing else. \
+utterance into JSON of the form {{"actions": [ ... ]}} and output nothing else. \
 Put ONE object per thing the user asked for, in order — usually one, but a \
 compound request like "give me black and make it harder" becomes two.
 
 Actions (each object has an "action" plus only the fields it needs):
-- "opponent_move": the human states THEIR move. Copy EXACTLY what they said into \
-"move" as UCI (e2e4) or SAN (Nf3, O-O) — do not substitute, "correct", or invent a \
-different move, and remember the human may be playing black (e.g. they say "e5", \
+- "opponent_move": the human states THEIR move. Put it in "move" as full-coordinate \
+UCI naming BOTH squares (e2e4, g8f6) so it is never ambiguous; fall back to SAN \
+(Nf3, O-O) only if you cannot tell the origin square. Do not substitute, "correct", \
+or invent a different move; the human may be playing black (e.g. they say "e5", \
 "c5", "knight f6").
 - "engine_move": the user asks YOU (the robot) to make your move.
 - "set_difficulty": put easy, medium, hard, or an Elo number in "difficulty".
@@ -24,12 +29,13 @@ evaluation). Put the question text in "question".
 Only fill "move", "difficulty", or "question" when relevant; otherwise omit them.
 Context: {context_line}"""
 
-# Few-shot pairs steer a small model toward strict, correct JSON.
+# Few-shot pairs steer a small model toward strict, correct JSON. They cover the
+# tricky cases: captures, undo phrasings, colour switches, and fillers.
 INTENT_EXAMPLES = [
-    ("knight to f3", '{"actions": [{"action": "opponent_move", "move": "Nf3"}]}'),
+    ("knight to f3", '{"actions": [{"action": "opponent_move", "move": "g1f3"}]}'),
     ("I'll play e4", '{"actions": [{"action": "opponent_move", "move": "e2e4"}]}'),
     ("e5", '{"actions": [{"action": "opponent_move", "move": "e5"}]}'),            # black replies
-    ("knight to f6", '{"actions": [{"action": "opponent_move", "move": "Nf6"}]}'),  # black, verbatim
+    ("knight to f6", '{"actions": [{"action": "opponent_move", "move": "g8f6"}]}'),  # black
     ("castle kingside", '{"actions": [{"action": "opponent_move", "move": "O-O"}]}'),
     ("okay, your move", '{"actions": [{"action": "engine_move"}]}'),
     ("make it harder", '{"actions": [{"action": "set_difficulty", "difficulty": "hard"}]}'),
@@ -40,7 +46,7 @@ INTENT_EXAMPLES = [
     ("give me black and set difficulty to hard",
      '{"actions": [{"action": "set_side", "color": "white"}, '
      '{"action": "set_difficulty", "difficulty": "hard"}]}'),
-    ("who is winning right now?", '{"actions": [{"action": "analyze", "question": "who is winning"}]}'),
+    ("who is winning now?", '{"actions": [{"action": "analyze", "question": "who is winning"}]}'),
     ("what's the best move here", '{"actions": [{"action": "analyze", "question": "best move"}]}'),
     ("let's start a new game", '{"actions": [{"action": "new_game"}]}'),
     ("take that back", '{"actions": [{"action": "undo"}]}'),
@@ -64,7 +70,9 @@ def _context_line(context: dict) -> str:
 
 
 def build_intent_messages(transcript: str, context: dict) -> list[dict]:
-    messages = [{"role": "system", "content": INTENT_SYSTEM.format(context_line=_context_line(context))}]
+    messages = [
+        {"role": "system", "content": INTENT_SYSTEM.format(context_line=_context_line(context))}
+    ]
     for user, assistant in INTENT_EXAMPLES:
         messages.append({"role": "user", "content": user})
         messages.append({"role": "assistant", "content": assistant})
@@ -72,14 +80,18 @@ def build_intent_messages(transcript: str, context: dict) -> list[dict]:
     return messages
 
 
-def facts_to_text(facts: dict) -> str:
+def facts_to_text(facts: PositionFacts) -> str:
     lines = [f"evaluation: {facts.get('verdict', 'unknown')}"]
     mat = facts.get("material", {})
     if mat:
-        lines.append(f"material: white {mat.get('white')} vs black {mat.get('black')} "
-                     f"(difference {mat.get('diff')} in {'white' if mat.get('diff', 0) >= 0 else 'black'}'s favor)")
-    if facts.get("best_move_san"):
-        line = facts.get("pv_sans") or [facts["best_move_san"]]
+        lines.append(
+            f"material: white {mat.get('white')} vs black {mat.get('black')} "
+            f"(difference {mat.get('diff')} in "
+            f"{'white' if mat.get('diff', 0) >= 0 else 'black'}'s favor)"
+        )
+    best = facts.get("best_move_san")
+    if best:
+        line = facts.get("pv_sans") or [best]
         lines.append("best line: " + " ".join(line))
     turn = facts.get("turn", "?")
     lines.append(f"{turn} to move" + (", and is in check" if facts.get("in_check") else ""))
@@ -89,7 +101,7 @@ def facts_to_text(facts: dict) -> str:
     return "\n".join(lines)
 
 
-def build_analysis_messages(question: str, facts: dict) -> list[dict]:
+def build_analysis_messages(question: str, facts: PositionFacts) -> list[dict]:
     return [
         {"role": "system", "content": PHRASE_SYSTEM.format(facts=facts_to_text(facts))},
         {"role": "user", "content": question or "How does the position look?"},

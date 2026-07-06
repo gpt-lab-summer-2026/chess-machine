@@ -1,7 +1,5 @@
 import shutil
 
-import pytest
-
 from chessmachine.chess_engine.engine import resolve_stockfish_path
 
 

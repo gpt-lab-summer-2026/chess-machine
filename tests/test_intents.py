@@ -67,6 +67,7 @@ def test_intent_from_json():
     assert intent_from_json({"action": "frobnicate"}, "x").action == "unknown"
     assert intent_from_json("not a dict", "x").action == "unknown"
     assert intent_from_json({"action": "engine_move", "move": "  "}, "x").move is None
+    assert intent_from_json({"action": "set_side", "color": "white"}, "x").color == "white"
 
 
 def test_intents_from_json_handles_object_list_and_wrapper():

@@ -2,9 +2,9 @@
 
 Nothing here depends on speech or hardware, so it is fully unit-testable.
 """
-from .game import GameState, MoveKind, classify_move
-from .engine import ChessEngine, AnalysisResult, create_engine
 from . import analysis
+from .engine import AnalysisResult, ChessEngine, create_engine
+from .game import GameState, MoveKind, classify_move
 
 __all__ = [
     "GameState",

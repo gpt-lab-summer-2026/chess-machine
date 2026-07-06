@@ -6,7 +6,6 @@ asserted without hardware, and prints a readable trace at debug log level.
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from .base import MotionController
 
@@ -39,12 +38,12 @@ class MockMotion(MotionController):
         self.ops.append(("home",))
         log.debug("mock: home")
 
-    def move_xz(self, x_mm: float, z_mm: float, feed: Optional[int] = None) -> None:
+    def move_xz(self, x_mm: float, z_mm: float, feed: int | None = None) -> None:
         self.x, self.z = x_mm, z_mm
         self.ops.append(("move", round(x_mm, 3), round(z_mm, 3)))
         log.debug("mock: move x=%.2f z=%.2f f=%s", x_mm, z_mm, feed)
 
-    def set_pulley(self, height_mm: float, feed: Optional[int] = None) -> None:
+    def set_pulley(self, height_mm: float, feed: int | None = None) -> None:
         self.height = height_mm
         self.ops.append(("pulley", round(height_mm, 3)))
         log.debug("mock: pulley h=%.2f f=%s", height_mm, feed)
