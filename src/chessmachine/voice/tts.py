@@ -9,6 +9,7 @@ import logging
 from abc import ABC, abstractmethod
 
 from ..config import TtsConfig
+from .console import safe_print
 
 log = logging.getLogger(__name__)
 
@@ -26,8 +27,7 @@ class StdoutTTS(TTS):
     """Prints instead of speaking (development / headless CI)."""
 
     def say(self, text: str) -> None:
-        # ASCII-only prefix: the dev console may not be UTF-8 (e.g. Windows cp1252).
-        print(f"[speaker] {text}")
+        safe_print(f"[speaker] {text}")
 
 
 class KokoroTTS(TTS):
@@ -52,7 +52,7 @@ class KokoroTTS(TTS):
         # Mirror the reply as text as well as speaking it, so the terminal shows
         # the conversation (same prefix StdoutTTS uses in dev). Print first — the
         # text should appear before the synthesis/playback delay.
-        print(f"[speaker] {text}")
+        safe_print(f"[speaker] {text}")
         from .audio import play
 
         samples, sample_rate = self.synth(text)

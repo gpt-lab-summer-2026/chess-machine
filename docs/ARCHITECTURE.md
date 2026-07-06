@@ -83,7 +83,12 @@ make illegal or wrong chess decisions.
 
 - SLM unreachable / bad output → `RuleBasedNLU` keeps the machine playable.
 - Stockfish missing → clear error, or `engine.backend: random` for bring-up.
-- Unreadable move → "say that again"; ambiguous move → "did you mean X or Y?".
+- Unplayable move → the machine explains *why* — the piece can't reach the
+  square, the move would leave the king in check, it's the wrong colour, or
+  nothing legal reaches the target — and suggests the real moves. A genuinely
+  ambiguous spoken move → "did you mean X or Y?" (and the SLM's move breaks the
+  tie when it agrees with what you said).
+- Destructive actions (new game, take-back) ask for a spoken "yes" first.
 - Promotion with no spare piece, or a too-small graveyard for reset → the
   machine does what it can and speaks the manual step needed.
 - Storage full on a capture → the move is **refused without touching the board**

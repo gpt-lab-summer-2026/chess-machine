@@ -9,6 +9,7 @@ import logging
 from abc import ABC, abstractmethod
 
 from ..config import AudioConfig, SttConfig
+from .console import safe_print
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class DistilWhisperSTT(STT):
         text = self.transcribe(samples)
         log.info("STT: %r", text)
         if text:
-            print(f"you> {text}")   # mirror the recognised speech in the terminal
+            safe_print(f"you> {text}")   # mirror the recognised speech in the terminal
         return text
 
 

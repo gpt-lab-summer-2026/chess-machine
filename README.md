@@ -94,6 +94,12 @@ respect that pairing: **"take that back" undoes the whole turn** (your move *and
 the machine's reply) so it's your move again, and **"your move"** is declined when
 it's actually your turn rather than the machine playing your colour.
 
+Destructive actions confirm first: **"new game"** and **"take that back"** ask for
+a spoken "yes" before doing anything. If a move can't be played, the machine says
+*why* — e.g. *"the pawn on e2 can't reach e5; it can go to e3, e4"* — instead of
+just asking you to repeat. In the voice pipeline the terminal mirrors the
+conversation too: your recognised words (`you> …`) and its replies (`[speaker] …`).
+
 ## Repo layout
 
 ```
@@ -108,7 +114,7 @@ src/chessmachine/
   voice/               distil-whisper STT, Kokoro TTS, mic/VAD capture
 firmware/esp32_chess/  Arduino firmware: steppers + pulley + magnet + protocol
 scripts/               calibrate.py, serial_console.py, fetch_models.sh
-tests/                 pytest suite for the hardware-free core (140+ tests)
+tests/                 pytest suite for the hardware-free core (200+ tests)
 docs/                  ARCHITECTURE, HARDWARE, PROTOCOL, SETUP_PI
 .github/workflows/     CI: ruff + mypy + pytest on Python 3.10-3.12
 ```
@@ -119,7 +125,7 @@ Install the dev extras (pytest, ruff, mypy, coverage) and run the same checks CI
 
 ```bash
 pip install -e ".[dev]"
-python -m pytest            # 140+ tests, no hardware or models needed
+python -m pytest            # 200+ tests, no hardware or models needed
 ruff check .                # lint (no autoformatter; lint only)
 mypy src                    # type-check
 ```

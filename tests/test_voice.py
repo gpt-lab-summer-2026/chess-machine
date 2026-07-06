@@ -3,8 +3,11 @@
 Both objects are built with `__new__` to skip their heavy model-loading
 `__init__`, so these run without faster-whisper / Kokoro installed.
 """
+import io
+import sys
 import types
 
+from chessmachine.voice.console import safe_print
 from chessmachine.voice.stt import DistilWhisperSTT
 from chessmachine.voice.tts import KokoroTTS
 
@@ -43,3 +46,16 @@ def test_kokoro_say_empty_is_silent(capsys, monkeypatch):
     monkeypatch.setattr("chessmachine.voice.audio.play", lambda *a, **k: None)
     tts.say("")
     assert capsys.readouterr().out == ""                # nothing to say
+
+
+def test_safe_print_survives_unencodable_chars(monkeypatch):
+    # A cp1252/ascii console (or redirected stdout) must not crash on a non-ASCII
+    # transcript — the offending characters are replaced, not raised on.
+    class AsciiStream(io.StringIO):
+        encoding = "ascii"
+
+    stream = AsciiStream()
+    monkeypatch.setattr(sys, "stdout", stream)
+    safe_print("mate soon — a sharp line")          # em dash isn't ASCII
+    assert "mate soon" in stream.getvalue()
+    assert "—" not in stream.getvalue()
