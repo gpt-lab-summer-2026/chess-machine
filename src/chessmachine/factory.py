@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .chess_engine import ChessEngine, create_engine
 from .config import Config, MotionConfig
-from .motion import BoardGeometry, Choreographer, Graveyard, MockMotion, MotionController, RelayChoreographer
+from .motion import BoardGeometry, Choreographer, Graveyard, MockMotion, MotionController, RelayChoreographer, RelayMotion
 from .nlu import NLU, create_nlu
 
 
