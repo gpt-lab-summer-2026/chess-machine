@@ -4,6 +4,8 @@ from .base import MotionController
 from .mock import MockMotion
 from .graveyard import Graveyard
 from .choreography import Choreographer, ExecutionReport
+from .relay_esp32 import RelayMotion
+from .relay_choreo import RelayChoreographer
 
 __all__ = [
     "Point",
@@ -13,4 +15,6 @@ __all__ = [
     "Graveyard",
     "Choreographer",
     "ExecutionReport",
+    "RelayMotion",
+    "RelayChoreographer",
 ]

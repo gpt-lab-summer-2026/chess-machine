@@ -35,6 +35,8 @@ def _parse_args(argv=None) -> argparse.Namespace:
                         "(both fall back gracefully if the server/binary is missing)")
     p.add_argument("--text", action="store_true", help="typed input + printed output (keeps real engine/motor)")
     p.add_argument("--mock", action="store_true", help="use the mock motion backend (no hardware)")
+    p.add_argument("--relay", action="store_true",
+                   help="use the relay DC-motor prototype backend (firmware/esp32_dc_prototype)")
     p.add_argument("--engine", choices=["stockfish", "random"], help="override engine backend")
     p.add_argument("--slm", choices=["llama_cpp", "rule_based"], help="override SLM backend")
     p.add_argument("--play-as", choices=["white", "black"], help="color the machine plays")
@@ -58,6 +60,8 @@ def _apply_overrides(cfg: Config, args: argparse.Namespace) -> Config:
         cfg.tts.backend = "stdout"
     if args.mock:
         cfg.motion.backend = "mock"
+    if args.relay:
+        cfg.motion.backend = "relay"
     if args.engine:
         cfg.engine.backend = args.engine
     if args.slm:

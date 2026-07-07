@@ -122,6 +122,22 @@ class SerialConfig:
 
 
 @dataclass
+class RelayConfig:
+    """Prototype DC-motor controller (firmware/esp32_dc_prototype).
+
+    Drives ONE brushed DC motor through a 2-channel relay H-bridge. There is no
+    positioning: every move just pulses the motor for `pulse_ms`. The pipeline
+    picks the direction — the user's moves spin one way, the machine's the other
+    — as a hardware bring-up test, not real piece placement.
+    """
+    port: str = "/dev/ttyUSB0"        # Windows: COMx ; Pi/Linux: /dev/ttyUSB0
+    baud: int = 115200
+    timeout_s: float = 5.0
+    connect_settle_s: float = 2.0     # ESP32 auto-resets when the port opens
+    pulse_ms: int = 800               # how long to run the motor per move
+
+
+@dataclass
 class GeometryConfig:
     # Coordinates are planar (X,Z) millimetres in a frame whose ORIGIN IS THE
     # CRANE PIVOT. The transport (serial_esp32) converts each (x,z) to polar
@@ -171,8 +187,9 @@ class MagnetConfig:
 
 @dataclass
 class MotionConfig:
-    backend: str = "serial"           # serial | mock (dev)
+    backend: str = "relay"            # relay (DC-motor prototype) | serial (crane) | mock (dev)
     serial: SerialConfig = field(default_factory=SerialConfig)
+    relay: RelayConfig = field(default_factory=RelayConfig)
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
     speeds: SpeedsConfig = field(default_factory=SpeedsConfig)
     magnet: MagnetConfig = field(default_factory=MagnetConfig)

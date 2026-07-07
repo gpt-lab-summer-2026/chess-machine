@@ -222,7 +222,7 @@ def test_actuation_failure_is_surfaced_not_swallowed():
     m, tts = make(auto_reply=False)               # concurrent_actuation defaults True
     def boom():
         raise RuntimeError("motor jam")
-    m.choreo.begin_move = lambda b, mv: (boom, ExecutionReport(kind=MoveKind.NORMAL))
+    m.choreo.begin_move = lambda b, mv, mover_is_machine=False: (boom, ExecutionReport(kind=MoveKind.NORMAL))
     m.handle("e4")
     assert m.game.history[-1][1] == "e4"          # move applied logically (no rollback)
     assert any("check the board" in l.lower() for l in tts.lines)

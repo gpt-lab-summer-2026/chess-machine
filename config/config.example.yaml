@@ -58,8 +58,16 @@ engine:
     hard:   { elo: 2400, depth: 18, movetime_ms: 1500, skill: 20 }
 
 motion:
-  backend: serial           # serial | mock (dev)
-  serial:
+  backend: relay            # relay (DC-motor prototype) | serial (crane) | mock (dev)
+  relay:                    # active DC-motor prototype backend
+    # One DC motor via a 2-channel relay H-bridge (firmware/esp32_dc_prototype).
+    # No positioning yet: each move just pulses the motor — the user's moves run
+    # it one way, the machine's the other. Bring up / verify with:
+    #   python scripts/relay_jog.py --config config/config.yaml
+    port: /dev/ttyUSB0      # Windows: COM3
+    baud: 115200
+    pulse_ms: 800           # how long the motor runs per move
+  serial:                   # crane (stepper) backend — unused while backend: relay
     port: /dev/ttyUSB0      # Windows: COM3
     baud: 115200
     timeout_s: 5.0

@@ -240,7 +240,9 @@ class ChessMachine:
         first = self.game.undo()
         if first is None:
             return self._say("There's no move to take back.")
-        notes = list(self.choreo.reverse_move(self.game.board, first).notes)
+        # After the pop, board.turn is the colour that made `first`.
+        first_by_machine = self.game.board.turn == self.game.machine_color
+        notes = list(self.choreo.reverse_move(self.game.board, first, first_by_machine).notes)
         count = 1
         # With auto-reply, the move just popped was the machine's reply, so it is
         # now the machine's turn again — take back the user's move too, handing
@@ -250,7 +252,8 @@ class ChessMachine:
                 and self.game.is_machine_turn()):
             second = self.game.undo()
             if second is not None:
-                notes += self.choreo.reverse_move(self.game.board, second).notes
+                second_by_machine = self.game.board.turn == self.game.machine_color
+                notes += self.choreo.reverse_move(self.game.board, second, second_by_machine).notes
                 count += 1
         text = "Move taken back." if count == 1 else "Moves taken back."
         if notes:
@@ -263,17 +266,20 @@ class ChessMachine:
         crane carries the piece while we compute and speak the explanation —
         the captured piece (if any) is always cleared first. Speaks internally."""
         board_before = self.game.board.copy()
+        # Whose move this is (the side to move vs. the machine's colour). The
+        # relay prototype uses it to pick a motor direction; the crane ignores it.
+        mover_is_machine = board_before.turn == self.game.machine_color
         # Promotions can prompt for a manual piece swap mid-actuation, so their
         # notes aren't known until the crane finishes — run those synchronously.
         concurrent = self.cfg.app.concurrent_actuation and move.promotion is None
         motion: Optional[threading.Thread] = None
         motion_result: Optional[dict] = None
         if concurrent:
-            complete, report = self.choreo.begin_move(board_before, move)   # discard now (blocks)
+            complete, report = self.choreo.begin_move(board_before, move, mover_is_machine)   # discard now (blocks)
             if not report.aborted:
                 motion, motion_result = self._spawn_motion(complete)
         else:
-            report = self.choreo.execute_move(board_before, move)
+            report = self.choreo.execute_move(board_before, move, mover_is_machine)
         if report.aborted:
             # Actuation refused before touching the board (e.g. storage full).
             # Do NOT apply the move, so the logical and physical boards stay in sync.

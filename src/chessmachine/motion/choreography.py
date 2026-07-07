@@ -96,12 +96,18 @@ class Choreographer:
         return self.geo.square_to_point(square)
 
     # -- public: execute one move ------------------------------------------- #
-    def execute_move(self, board_before: chess.Board, move: chess.Move) -> ExecutionReport:
-        """Actuate `move`, given the position *before* it is applied (blocking)."""
+    def execute_move(self, board_before: chess.Board, move: chess.Move,
+                     mover_is_machine: bool = False) -> ExecutionReport:
+        """Actuate `move`, given the position *before* it is applied (blocking).
+
+        `mover_is_machine` is accepted for parity with RelayChoreographer (which
+        picks a motor direction from it); the crane derives motion from geometry
+        and ignores it."""
         complete, _report = self.begin_move(board_before, move)
         return complete()
 
-    def begin_move(self, board_before: chess.Board, move: chess.Move):
+    def begin_move(self, board_before: chess.Board, move: chess.Move,
+                   mover_is_machine: bool = False):
         """Split a move into (complete, report): the captured piece (if any) is
         cleared to storage *now* (blocking), and `complete()` actuates the rest.
 
@@ -176,9 +182,11 @@ class Choreographer:
             )
 
     # -- public: physically reverse a move (undo) --------------------------- #
-    def reverse_move(self, board_before: chess.Board, move: chess.Move) -> ExecutionReport:
+    def reverse_move(self, board_before: chess.Board, move: chess.Move,
+                     mover_is_machine: bool = False) -> ExecutionReport:
         """Undo `move` on the board. `board_before` is the position it was made
-        from (i.e. after popping it from the move stack)."""
+        from (i.e. after popping it from the move stack). `mover_is_machine` is
+        ignored here (see execute_move)."""
         cls = classify_move(board_before, move)
         report = ExecutionReport(kind=cls.kind)
 
