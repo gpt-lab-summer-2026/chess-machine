@@ -10,7 +10,6 @@ ever resolve to legal moves (or to an empty/ambiguous list the caller re-asks on
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 import chess
 
@@ -46,7 +45,7 @@ def normalize_spoken(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
-def _try_exact(text: str, board: chess.Board) -> Optional[chess.Move]:
+def _try_exact(text: str, board: chess.Board) -> chess.Move | None:
     s = text.strip()
     # SAN (handles Nf3, exd5, O-O, e8=Q+, ...). parse_san already checks legality.
     for cand in (s, s.replace("0", "O")):
@@ -101,13 +100,13 @@ def parse_move(text: str, board: chess.Board) -> list[chess.Move]:
     candidates.extend(_castling_candidates(t, board))
 
     # Detect a requested promotion piece ("promote to queen", or a trailing piece word).
-    promo_type: Optional[int] = None
+    promo_type: int | None = None
     m = re.search(r"promot\w*\s+(?:to\s+)?(king|queen|rook|bishop|knight)", t)
     if m:
         promo_type = _PIECE_WORDS[m.group(1)]
 
     # Moving piece word (knight, queen, ...).
-    piece_type: Optional[int] = None
+    piece_type: int | None = None
     for word, ptype in _PIECE_WORDS.items():
         if re.search(rf"\b{word}\b", t):
             piece_type = ptype
@@ -129,7 +128,7 @@ def parse_move(text: str, board: chess.Board) -> list[chess.Move]:
         moves_to = [mv for mv in board.legal_moves if mv.to_square == to_sq]
         if piece_type is not None and promo_type is None:
             by_mover = [mv for mv in moves_to
-                        if board.piece_at(mv.from_square).piece_type == piece_type]
+                        if (p := board.piece_at(mv.from_square)) and p.piece_type == piece_type]
             # If naming the piece empties the list but promotions exist, the word
             # was the promotion target (e.g. "knight on a8"), not the mover.
             candidates.extend(by_mover if by_mover else moves_to)
@@ -140,7 +139,7 @@ def parse_move(text: str, board: chess.Board) -> list[chess.Move]:
 
 
 def _resolve(candidates: list[chess.Move], board: chess.Board,
-             promo_pref: Optional[int]) -> list[chess.Move]:
+             promo_pref: int | None) -> list[chess.Move]:
     """De-dupe, keep only legal moves, and collapse promotion ambiguity."""
     legal = []
     seen = set()
@@ -153,7 +152,11 @@ def _resolve(candidates: list[chess.Move], board: chess.Board,
     if promos and len(legal) == len(promos):
         # Every candidate is a promotion of the same pawn: pick the requested
         # piece, defaulting to a queen, so we return a single move.
-        want = promo_pref if promo_pref in (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT) else _PROMO_DEFAULT
+        want = (
+            promo_pref
+            if promo_pref in (chess.QUEEN, chess.ROOK, chess.BISHOP, chess.KNIGHT)
+            else _PROMO_DEFAULT
+        )
         chosen = [m for m in promos if m.promotion == want]
         if chosen:
             return chosen[:1]
@@ -164,3 +167,60 @@ def _resolve(candidates: list[chess.Move], board: chess.Board,
 def describe_candidates(moves: list[chess.Move], board: chess.Board) -> str:
     """Human-readable list of candidate moves for a clarification prompt."""
     return ", ".join(board.san(m) for m in moves)
+
+
+def explain_move_failure(text: str, board: chess.Board) -> str:
+    """Explain why a spoken move can't be played, suggesting alternatives where
+    possible. Used when `parse_move` finds nothing legal, so the machine can say
+    *why* instead of a bare "say it again"."""
+    t = normalize_spoken(text)
+    squares = _SQUARE_RE.findall(t)
+
+    def _dests(sq: int) -> list[str]:
+        return sorted(board.san(m) for m in board.legal_moves if m.from_square == sq)
+
+    if len(squares) >= 2:
+        frm, to = chess.parse_square(squares[0]), chess.parse_square(squares[1])
+        piece = board.piece_at(frm)
+        if piece is None:
+            return f"There's no piece on {squares[0]} to move."
+        if piece.color != board.turn:
+            mover = "white" if board.turn == chess.WHITE else "black"
+            owner = "white" if piece.color == chess.WHITE else "black"
+            return f"It's {mover}'s move, but {squares[0]} holds {owner}'s piece."
+        name = chess.piece_name(piece.piece_type)
+        promo = (chess.QUEEN if piece.piece_type == chess.PAWN
+                 and chess.square_rank(to) in (0, 7) else None)
+        candidate = chess.Move(frm, to, promotion=promo)
+        if board.is_pseudo_legal(candidate):
+            reason = f"moving the {name} to {squares[1]} would leave the king in check"
+        else:
+            reason = f"the {name} on {squares[0]} can't reach {squares[1]}"
+        dests = _dests(frm)
+        if dests:
+            return f"That move isn't legal: {reason}. It can go to {', '.join(dests)}."
+        return f"That move isn't legal: {reason}, and it has nowhere legal to go."
+
+    if len(squares) == 1:
+        # If they named a piece, explain from that piece's point of view.
+        piece_type = next((pt for word, pt in _PIECE_WORDS.items()
+                           if re.search(rf"\b{word}\b", t)), None)
+        if piece_type is not None:
+            name = chess.piece_name(piece_type)
+            owned = [sq for sq in chess.SQUARES
+                     if (p := board.piece_at(sq)) is not None
+                     and p.piece_type == piece_type and p.color == board.turn]
+            if not owned:
+                return f"You have no {name} in play to move."
+            dests = sorted(board.san(m) for m in board.legal_moves if m.from_square in owned)
+            if not dests:
+                return f"Your {name} can't move anywhere right now."
+            return f"No {name} can reach {squares[0]}. A {name} can go to {', '.join(dests)}."
+        to = chess.parse_square(squares[0])
+        reachers = sorted(board.san(m) for m in board.legal_moves if m.to_square == to)
+        if not reachers:
+            return f"Nothing can legally move to {squares[0]} right now. Say it again?"
+        return f"Did you mean {', '.join(reachers)}?"
+
+    return ("I couldn't read that as a move. Try the target square, like "
+            "'e4', 'knight to f3', or 'e2 to e4'.")

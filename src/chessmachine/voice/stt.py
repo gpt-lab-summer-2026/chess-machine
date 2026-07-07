@@ -9,6 +9,7 @@ import logging
 from abc import ABC, abstractmethod
 
 from ..config import AudioConfig, SttConfig
+from .console import safe_print
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +36,7 @@ class StdinSTT(STT):
 class DistilWhisperSTT(STT):
     def __init__(self, cfg: SttConfig, audio_cfg: AudioConfig):
         from faster_whisper import WhisperModel  # lazy: heavy dependency
+
         from .audio import AudioCapture
 
         log.info("Loading distil-whisper model %s (%s/%s)...",
@@ -48,6 +50,7 @@ class DistilWhisperSTT(STT):
             return ""
         segments, _info = self.model.transcribe(
             samples, language=self.cfg.language, beam_size=self.cfg.beam_size,
+            vad_filter=True,   # drop non-speech regions -> fewer silence hallucinations
         )
         return " ".join(seg.text.strip() for seg in segments).strip()
 
@@ -55,6 +58,8 @@ class DistilWhisperSTT(STT):
         samples = self.capture.record_utterance()
         text = self.transcribe(samples)
         log.info("STT: %r", text)
+        if text:
+            safe_print(f"you> {text}")   # mirror the recognised speech in the terminal
         return text
 
 

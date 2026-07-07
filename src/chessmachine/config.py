@@ -10,7 +10,6 @@ not stringized annotations.
 """
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -23,14 +22,15 @@ class VadConfig:
     enabled: bool = True
     aggressiveness: int = 2          # webrtcvad 0..3 (3 = most aggressive)
     silence_ms: int = 800            # trailing silence that ends an utterance
+    min_speech_ms: int = 250         # ignore blips with less actual speech than this
     frame_ms: int = 30               # webrtcvad frame size (10/20/30)
     max_utterance_s: float = 15.0
 
 
 @dataclass
 class AudioConfig:
-    input_device: Optional[str] = None      # None = system default
-    output_device: Optional[str] = None
+    input_device: str | None = None      # None = system default
+    output_device: str | None = None
     sample_rate: int = 16000                 # whisper expects 16 kHz mono
     channels: int = 1
     push_to_talk: bool = False               # if True, record while a key is held
@@ -257,14 +257,40 @@ def _merge_into(obj, data: dict):
     return obj
 
 
+def _validate(cfg: Config) -> None:
+    """Sanity-check a (merged) config so a calibration typo fails fast and clearly.
+
+    Run after the YAML merge rather than in __post_init__: the merger assigns
+    fields via setattr after construction, so __post_init__ would only ever see
+    the defaults, never the overridden values.
+    """
+    g = cfg.motion.geometry
+    if g.square_pitch_mm <= 0:
+        raise ValueError(f"geometry.square_pitch_mm must be > 0 (got {g.square_pitch_mm})")
+    if g.pick_height_mm < 0 or g.travel_height_mm < 0:
+        raise ValueError("geometry pick_height_mm / travel_height_mm must be >= 0")
+    if g.travel_height_mm < g.pick_height_mm:
+        raise ValueError(
+            f"geometry.travel_height_mm ({g.travel_height_mm}) must be >= "
+            f"pick_height_mm ({g.pick_height_mm})"
+        )
+    s = cfg.motion.speeds
+    if s.travel_feed <= 0 or s.lift_feed <= 0:
+        raise ValueError("motion.speeds feeds (travel_feed, lift_feed) must be > 0")
+    ser = cfg.motion.serial
+    if ser.timeout_s <= 0 or ser.home_timeout_s <= 0:
+        raise ValueError("motion.serial timeouts must be > 0")
+
+
 def load_config(path: str | Path | None = None) -> Config:
     """Load configuration, merging the YAML at `path` over built-in defaults."""
     cfg = Config()
-    if path is None:
-        return cfg
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Config file not found: {p}")
-    with p.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh) or {}
-    return _merge_into(cfg, data)
+    if path is not None:
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"Config file not found: {p}")
+        with p.open("r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        cfg = _merge_into(cfg, data)
+    _validate(cfg)
+    return cfg

@@ -1,7 +1,10 @@
 import chess
 
 from chessmachine.chess_engine.game import (
-    GameState, classify_move, speak_san, MoveKind,
+    GameState,
+    MoveKind,
+    classify_move,
+    speak_san,
 )
 
 

@@ -1,13 +1,14 @@
 """End-to-end orchestration with everything mocked (no hardware, no models)."""
 import chess
 
+from chessmachine.chess_engine.engine import RandomEngine
 from chessmachine.config import Config, SlmConfig
-from chessmachine.pipeline import ChessMachine
 from chessmachine.factory import build_choreographer
 from chessmachine.nlu import create_nlu
-from chessmachine.chess_engine.engine import RandomEngine
-from chessmachine.voice.tts import TTS
+from chessmachine.nlu.intents import Intent
+from chessmachine.pipeline import ChessMachine
 from chessmachine.voice.stt import StdinSTT
+from chessmachine.voice.tts import TTS
 
 
 class CaptureTTS(TTS):
@@ -51,11 +52,13 @@ def test_no_autoreply_plays_single_ply():
     assert len(m.game.history) == 1
 
 
-def test_illegal_move_asks_to_repeat():
+def test_illegal_move_is_explained():
     m, tts = make(auto_reply=False)
     m.handle("e2 to e5")          # illegal jump
     assert len(m.game.history) == 0
-    assert any("again" in l.lower() for l in tts.lines)
+    spoken = " ".join(tts.lines).lower()
+    assert "isn't legal" in spoken               # says why, not a bare re-ask
+    assert "e3" in spoken and "e4" in spoken     # ... and offers the pawn's real moves
 
 
 def test_scholars_mate_announced():
@@ -86,6 +89,7 @@ def test_new_game_resets_board():
     m.handle("e4")
     m.handle("e5")
     m.handle("new game")
+    m.handle("yes")              # confirm the reset
     assert m.game.board == chess.Board()
 
 
@@ -94,6 +98,22 @@ def test_undo_takes_back():
     m.handle("e4")
     assert len(m.game.history) == 1
     m.handle("undo")
+    m.handle("yes")              # confirm the take-back
+    assert len(m.game.history) == 0
+
+
+def test_undo_requires_confirmation():
+    m, tts = make(auto_reply=False)
+    m.handle("e4")
+    tts.lines.clear()
+    m.handle("undo")                       # should ASK, not take back
+    assert len(m.game.history) == 1        # nothing undone yet
+    assert any("yes" in l.lower() for l in tts.lines)
+    m.handle("no, keep it")                # decline
+    assert len(m.game.history) == 1        # move still there
+    assert m.game.history[0][1] == "e4"
+    m.handle("undo")
+    m.handle("yes")                        # confirm this time
     assert len(m.game.history) == 0
 
 
@@ -147,6 +167,18 @@ def test_set_side_to_current_color_is_noop():
     assert any("already" in l.lower() for l in tts.lines)
 
 
+def test_set_side_uses_transcript_perspective_over_slm_color():
+    # Small models flip the perspective: the user says "let me play black" (they
+    # want black -> the MACHINE takes white), but the SLM fills color="black" (the
+    # colour the user named). The literal transcript must win, so the machine
+    # switches to white instead of no-opping on its current colour.
+    m, _ = make(auto_reply=True, play_as="black")     # machine starts Black
+    m.nlu.interpret = lambda t, c: [Intent("set_side", color="black", text="let me play black")]
+    m.handle("let me play black")
+    assert m.machine_color == chess.WHITE
+    assert len(m.game.history) == 1                    # switched and opened as White
+
+
 def test_undo_takes_back_full_move_pair():
     # With the machine auto-replying, "undo" should reverse BOTH its reply and
     # the user's move, handing the move back to the user.
@@ -155,6 +187,7 @@ def test_undo_takes_back_full_move_pair():
     m.handle("e4")                       # user e4 + machine's auto-reply = 2 plies
     assert len(m.game.history) == 2
     m.handle("undo")
+    m.handle("yes")                      # confirm the take-back
     assert len(m.game.history) == 0
     assert m.game.board == chess.Board()
     assert m.game.turn() == chess.WHITE   # user (White) is back on move
@@ -204,6 +237,81 @@ def test_new_game_clears_stale_storage():
     assert gy.occupied() == 0
 
 
+def test_autoreply_failure_keeps_opponent_move_and_warns():
+    # If the engine's auto-reply blows up, the human's move (already played and
+    # announced) must stick, and we warn instead of making it look like the
+    # human's move failed.
+    m, tts = make(auto_reply=True, play_as="black")
+
+    def boom(board):
+        raise RuntimeError("engine crashed")
+
+    m.engine.best_move = boom            # make the auto-reply fail
+    tts.lines.clear()
+    m.handle("e4")                       # human move succeeds; reply blows up
+    assert [san for _, san in m.game.history] == ["e4"]   # human's move stuck, no reply
+    spoken = " ".join(tts.lines).lower()
+    assert "reply" in spoken and "check the board" in spoken
+
+
+def test_new_game_requires_confirmation_midgame():
+    m, tts = make(auto_reply=False)
+    m.handle("e4")
+    n = len(m.game.history)
+    tts.lines.clear()
+    m.handle("new game")                       # should ASK, not reset
+    assert len(m.game.history) == n            # nothing reset yet
+    assert any("yes" in line.lower() for line in tts.lines)
+    m.handle("no, keep playing")               # decline
+    assert len(m.game.history) == n            # still intact
+    assert m.game.history[0][1] == "e4"
+
+
+def test_set_color_switch_lets_machine_open():
+    # Machine is Black and it's the human's (White's) move; asking to play Black
+    # ourselves hands White to the machine, which then opens.
+    m, _ = make(auto_reply=True, play_as="black")
+    assert len(m.game.history) == 0
+    m.handle("let me play black")
+    assert m.machine_color == chess.WHITE
+    assert len(m.game.history) == 1            # machine opened as White
+
+
+def test_opponent_move_prefers_spoken_text_over_slm_guess():
+    # If the SLM hallucinates a wrong/illegal move but the transcript is correct,
+    # play what was actually said.
+    m, _ = make(auto_reply=False)
+
+    def fake_interpret(transcript, context):
+        return [Intent(action="opponent_move", move="a1a8", text="knight to f3")]
+
+    m.nlu.interpret = fake_interpret
+    m.handle("whatever whisper produced")
+    assert m.game.history and m.game.history[0][1] == "Nf3"
+
+
+def test_ambiguous_transcript_disambiguated_by_slm_move():
+    # Two white knights (b5, f5) both reach d4, so the spoken "knight to d4" is
+    # ambiguous on its own. The SLM's full-coordinate move picks one, and since
+    # it's one of the spoken candidates we play it instead of re-asking.
+    m, _ = make(auto_reply=False)                 # human is White, machine Black
+    m.game.reset(start_fen="4k3/8/8/1N3N2/8/8/8/4K3 w - - 0 1")
+    m.nlu.interpret = lambda t, c: [Intent("opponent_move", move="b5d4", text="knight to d4")]
+    m.handle("knight to d4")
+    assert m.game.history and m.game.history[-1][1] == "Nbd4"
+
+
+def test_ambiguous_transcript_without_slm_help_still_asks():
+    # Same ambiguous position, but the SLM offers no usable move -> we must still
+    # ask the user to clarify rather than guessing.
+    m, tts = make(auto_reply=False)
+    m.game.reset(start_fen="4k3/8/8/1N3N2/8/8/8/4K3 w - - 0 1")
+    m.nlu.interpret = lambda t, c: [Intent("opponent_move", move=None, text="knight to d4")]
+    m.handle("knight to d4")
+    assert not m.game.history
+    assert any("ambiguous" in l.lower() for l in tts.lines)
+
+
 def test_difficulty_by_elo_number():
     # A numeric difficulty ("set difficulty to 1200") is synthesized via
     # preset_from_elo; regression for the missing import that made it crash.
@@ -216,8 +324,8 @@ def test_difficulty_by_elo_number():
 def test_actuation_failure_is_surfaced_not_swallowed():
     # If the crane fails mid-move on the worker thread, the machine must warn the
     # user (the logical move is already applied) instead of silently desyncing.
-    from chessmachine.motion.choreography import ExecutionReport
     from chessmachine.chess_engine.game import MoveKind
+    from chessmachine.motion.choreography import ExecutionReport
 
     m, tts = make(auto_reply=False)               # concurrent_actuation defaults True
     def boom():

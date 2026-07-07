@@ -1,13 +1,10 @@
 """Build subsystems from a Config. Keeps wiring in one place."""
 from __future__ import annotations
 
+from .chess_engine import ChessEngine, create_engine
 from .config import Config, MotionConfig
-from .chess_engine import create_engine, ChessEngine
-from .motion import (
-    MotionController, MockMotion, BoardGeometry, Graveyard, Choreographer,
-    RelayMotion, RelayChoreographer,
-)
-from .nlu import create_nlu, NLU
+from .motion import BoardGeometry, Choreographer, Graveyard, MockMotion, MotionController, RelayChoreographer
+from .nlu import NLU, create_nlu
 
 
 def create_motion_controller(cfg: MotionConfig) -> MotionController:

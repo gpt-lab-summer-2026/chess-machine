@@ -11,7 +11,6 @@ rotary axes for the crane).
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 
 class MotionController(ABC):
@@ -28,11 +27,11 @@ class MotionController(ABC):
         """Home all axes against their endstops; defines the zero reference."""
 
     @abstractmethod
-    def move_xz(self, x_mm: float, z_mm: float, feed: Optional[int] = None) -> None:
+    def move_xz(self, x_mm: float, z_mm: float, feed: int | None = None) -> None:
         """Move the head to planar (x,z) mm (pivot frame). Blocks until done."""
 
     @abstractmethod
-    def set_pulley(self, height_mm: float, feed: Optional[int] = None) -> None:
+    def set_pulley(self, height_mm: float, feed: int | None = None) -> None:
         """Raise/lower the electromagnet to `height_mm` above the board."""
 
     @abstractmethod

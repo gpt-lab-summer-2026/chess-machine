@@ -19,6 +19,7 @@ audio:
     enabled: true
     aggressiveness: 2       # 0..3
     silence_ms: 800         # trailing silence that ends an utterance
+    min_speech_ms: 250      # ignore blips shorter than this (avoids phantom moves)
 
 stt:
   backend: distil_whisper   # distil_whisper | stdin (dev)
@@ -41,6 +42,7 @@ slm:
   model_path: models/slm/model.gguf   # used only in inproc mode
   n_ctx: 4096
   n_threads: 4
+  n_gpu_layers: 0           # inproc only: layers to offload to GPU (-1 = all)
   temperature: 0.2
   max_tokens: 256
 

@@ -1,11 +1,16 @@
 """Move-quality classification, grounded tactics, and difficulty-scaled comments."""
 import chess
 
-from chessmachine.chess_engine.engine import ChessEngine, AnalysisResult
 from chessmachine.chess_engine.analysis import (
-    MoveQuality, classify_move_quality, find_tactics, _offers_material,
-    should_comment, move_comment_summary, difficulty_tier,
+    MoveQuality,
+    _offers_material,
+    classify_move_quality,
+    difficulty_tier,
+    find_tactics,
+    move_comment_summary,
+    should_comment,
 )
+from chessmachine.chess_engine.engine import AnalysisResult, ChessEngine
 
 
 # --- a stub engine with scripted evaluations (no Stockfish needed) ---------- #

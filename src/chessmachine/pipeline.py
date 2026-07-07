@@ -8,19 +8,25 @@ so it can be driven by real speech, typed text, or tests identically.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 import threading
-from typing import Optional
 
 import chess
 
+from .chess_engine import ChessEngine, GameState, analysis
+from .chess_engine.game import speak_san
 from .clock import MatchClock
 from .config import Config, DifficultyPreset, preset_from_elo
-from .chess_engine import GameState, ChessEngine, analysis
-from .chess_engine.game import speak_san
 from .motion import Choreographer
-from .nlu import NLU, parse_move, describe_candidates
+from .nlu import (
+    NLU,
+    describe_candidates,
+    explain_move_failure,
+    parse_move,
+    resolve_side_request,
+)
 from .nlu.intents import Intent
 from .voice.stt import STT
 from .voice.tts import TTS
@@ -34,6 +40,15 @@ HELP_TEXT = (
     "'I'll play black' to change colors, or say 'new game'."
 )
 QUIT_WORDS = {"quit", "exit", "stop", "goodbye", "q"}
+_AFFIRM_WORDS = {
+    "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "confirm", "affirmative", "please",
+}
+
+
+def _is_affirmative(text: str) -> bool:
+    """True for a spoken 'yes' in answer to a confirmation prompt."""
+    t = re.sub(r"[^a-z ]", "", text.lower())
+    return bool(set(t.split()) & _AFFIRM_WORDS) or any(p in t for p in ("do it", "go ahead"))
 
 
 class ChessMachine:
@@ -50,6 +65,7 @@ class ChessMachine:
         self.game = GameState(machine_color=self.machine_color)
         self.difficulty = config.engine.default_difficulty
         self._last_spoken = ""
+        self._pending: str | None = None   # a destructive action awaiting confirmation
         self.clock = MatchClock()
 
     # -- lifecycle ----------------------------------------------------------- #
@@ -79,6 +95,7 @@ class ChessMachine:
                     self.handle(transcript)
                 except Exception:  # noqa: BLE001 - keep the loop alive
                     log.exception("Error handling utterance %r", transcript)
+                    self._safe_park()   # release the magnet + lift if a piece was mid-move
                     self._say("Something went wrong handling that. If a piece was "
                               "mid-move, please check the board before we continue.")
         finally:
@@ -86,13 +103,19 @@ class ChessMachine:
 
     def close(self) -> None:
         for fn in (self._park, self.choreo.close, self.engine.close, self.nlu.close):
-            try:
+            with contextlib.suppress(Exception):
                 fn()
-            except Exception:  # noqa: BLE001
-                pass
 
     def _park(self) -> None:
         self.choreo.park()
+
+    def _safe_park(self) -> None:
+        """Best-effort safe state after an error: lift the magnet and release it,
+        so a half-finished move can't leave a piece stuck to the electromagnet."""
+        try:
+            self.choreo.park()
+        except Exception:  # noqa: BLE001 - recovery must never raise
+            log.exception("Failed to park after an error")
 
     # -- top-level dispatch -------------------------------------------------- #
     def handle(self, transcript: str) -> str:
@@ -100,6 +123,10 @@ class ChessMachine:
         intents (the SLM does the language work, incl. splitting a compound
         request like "give me black and set difficulty to hard"); we just run
         each in order and join the spoken replies."""
+        # A pending confirmation (e.g. "new game" mid-game) intercepts the next
+        # utterance as a yes/no answer before any NLU dispatch.
+        if self._pending:
+            return self._resolve_pending(transcript)
         replies = []
         for intent in self.nlu.interpret(transcript, self._context()):
             log.info("intent=%s move=%s diff=%s color=%s", intent.action,
@@ -108,6 +135,16 @@ class ChessMachine:
             if reply:
                 replies.append(reply)
         return " ".join(replies)
+
+    def _resolve_pending(self, transcript: str) -> str:
+        """Resolve a yes/no answer to a pending confirmation (new game or undo)."""
+        pending, self._pending = self._pending, None
+        if _is_affirmative(transcript):
+            if pending == "undo":
+                return self._really_undo()
+            return self._really_new_game()          # pending == "new_game"
+        return self._say("Okay, keeping the move." if pending == "undo"
+                         else "Okay, keeping the current game.")
 
     def _dispatch(self, intent: Intent) -> str:
         a = intent.action
@@ -156,11 +193,22 @@ class ChessMachine:
         If the switch puts the machine on move, it plays immediately (auto-reply),
         so "you take white from here" hands the turn straight over.
         """
-        color = (intent.color or "").strip().lower()
-        if color in ("white", "black"):
-            new_color = chess.WHITE if color == "white" else chess.BLACK
+        # Resolve the machine's target colour from what the user actually said —
+        # small models routinely flip the perspective on side requests (dropping
+        # the colour the *user* wants where the *machine's* colour belongs, which
+        # lands on the current colour and silently no-ops). Fall back to the
+        # SLM's `color` only when the words don't clearly resolve.
+        side = resolve_side_request(intent.text or "")
+        if side == "swap":
+            new_color = not self.machine_color
+        elif side in ("white", "black"):
+            new_color = chess.WHITE if side == "white" else chess.BLACK
         else:
-            new_color = not self.machine_color    # no/blank color => swap sides
+            color = (intent.color or "").strip().lower()
+            if color in ("white", "black"):
+                new_color = chess.WHITE if color == "white" else chess.BLACK
+            else:
+                new_color = not self.machine_color    # no/blank color => swap sides
         if new_color == self.machine_color:
             return self._say(f"I'm already playing {GameState.color_name(new_color)}.")
 
@@ -212,7 +260,15 @@ class ChessMachine:
                 if candidates:
                     break
         if not candidates:
-            return self._say("move not readable. say it again please")
+            return self._say(explain_move_failure(intent.text or intent.move or "", board))
+        # If the spoken form was ambiguous (e.g. "knight to f6" with two knights
+        # that reach f6), let the SLM's structured move break the tie — but only
+        # when it resolves to exactly one of the candidates we already found, so
+        # a hallucinated or wrong-color move can't slip in.
+        if len(candidates) > 1 and intent.move:
+            slm_moves = parse_move(intent.move, board)
+            if len(slm_moves) == 1 and slm_moves[0] in candidates:
+                candidates = slm_moves
         if len(candidates) > 1:
             return self._say(f"ambiguous move: did you mean "
                              f"{describe_candidates(candidates, board)}?")
@@ -220,11 +276,25 @@ class ChessMachine:
         # Auto-reply with the engine's move if it's now our turn.
         if (self.cfg.app.auto_reply and not self.game.is_game_over()
                 and self.game.is_machine_turn()):
-            reply = self._do_engine_move("My move:")
+            try:
+                reply = self._do_engine_move("My move:")
+            except Exception:  # noqa: BLE001 - the opponent's move already stuck
+                log.exception("Auto-reply failed after the opponent's move")
+                self._safe_park()
+                note = self._say("I couldn't make my reply just now; please check the board.")
+                return spoken + " " + note
             return spoken + " " + reply
         return spoken
 
     def _do_new_game(self) -> str:
+        # A reset discards a game in progress, so confirm before doing it.
+        if self.game.board.move_stack:
+            self._pending = "new_game"
+            return self._say("Start a new game? That clears the current one. "
+                             "Say yes to confirm.")
+        return self._really_new_game()
+
+    def _really_new_game(self) -> str:
         notes = self.choreo.setup_starting_position(self.game.board)
         self.game.reset()
         if notes:
@@ -237,6 +307,13 @@ class ChessMachine:
         return spoken
 
     def _do_undo(self) -> str:
+        # A take-back discards the position, so confirm first — like a new game.
+        if not self.game.board.move_stack:
+            return self._say("There's no move to take back.")
+        self._pending = "undo"
+        return self._say("Take back the last move? Say yes to confirm.")
+
+    def _really_undo(self) -> str:
         first = self.game.undo()
         if first is None:
             return self._say("There's no move to take back.")
@@ -272,8 +349,8 @@ class ChessMachine:
         # Promotions can prompt for a manual piece swap mid-actuation, so their
         # notes aren't known until the crane finishes — run those synchronously.
         concurrent = self.cfg.app.concurrent_actuation and move.promotion is None
-        motion: Optional[threading.Thread] = None
-        motion_result: Optional[dict] = None
+        motion: threading.Thread | None = None
+        motion_result: dict | None = None
         if concurrent:
             complete, report = self.choreo.begin_move(board_before, move, mover_is_machine)   # discard now (blocks)
             if not report.aborted:
@@ -299,7 +376,7 @@ class ChessMachine:
         self._say(text)                 # spoken while the crane is still moving
         if motion is not None:
             motion.join()               # don't begin the next move until actuation is done
-            if motion_result["error"] is not None:
+            if motion_result is not None and motion_result["error"] is not None:
                 # The move is already applied logically, but the crane didn't
                 # finish — flag the possible desync rather than swallowing it.
                 self._say("I couldn't finish moving that piece — please check the "
@@ -358,7 +435,7 @@ class ChessMachine:
             log.exception("Move commentary failed")
             return ""
 
-    def _resolve_difficulty(self, name: str) -> Optional[tuple[str, DifficultyPreset]]:
+    def _resolve_difficulty(self, name: str) -> tuple[str, DifficultyPreset] | None:
         name = (name or "").strip().lower()
         if not name:
             return None
@@ -371,7 +448,7 @@ class ChessMachine:
             return f"{elo} Elo", preset_from_elo(elo)
         return None
 
-    def _last_san(self) -> Optional[str]:
+    def _last_san(self) -> str | None:
         return self.game.history[-1][1] if self.game.history else None
 
     def _context(self) -> dict:

@@ -7,8 +7,12 @@ for whisper. Heavy deps are imported lazily so the module loads without them.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from ..config import AudioConfig
+
+if TYPE_CHECKING:
+    import numpy as np
 
 log = logging.getLogger(__name__)
 
@@ -17,14 +21,14 @@ class AudioCapture:
     def __init__(self, cfg: AudioConfig):
         self.cfg = cfg
 
-    def record_utterance(self):
+    def record_utterance(self) -> np.ndarray:
         """Record one utterance; return a float32 numpy array at cfg.sample_rate."""
         if self.cfg.vad.enabled:
             return self._record_vad()
         return self._record_fixed(self.cfg.vad.max_utterance_s)
 
     # -- VAD-gated capture --------------------------------------------------- #
-    def _record_vad(self):
+    def _record_vad(self) -> np.ndarray:
         import numpy as np
         import sounddevice as sd
         import webrtcvad
@@ -39,6 +43,7 @@ class AudioCapture:
         collected: list[bytes] = []
         triggered = False
         num_silent = 0
+        speech_frames = 0
 
         with sd.RawInputStream(samplerate=sr, channels=1, dtype="int16",
                                blocksize=frame_len, device=self.cfg.input_device) as stream:
@@ -53,20 +58,26 @@ class AudioCapture:
                     if is_speech:
                         triggered = True
                         collected.append(frame)
+                        speech_frames += 1
                 else:
                     collected.append(frame)
-                    num_silent = num_silent + 1 if not is_speech else 0
+                    if is_speech:
+                        speech_frames += 1
+                        num_silent = 0
+                    else:
+                        num_silent += 1
                     if num_silent >= silence_frames:
                         break
 
-        if not collected:
+        # Reject blips: a click or stray noise can trip the VAD for a frame or two.
+        # Require a minimum amount of actual speech before we bother transcribing.
+        if speech_frames * frame_ms < self.cfg.vad.min_speech_ms:
             return np.zeros(0, dtype=np.float32)
         pcm = np.frombuffer(b"".join(collected), dtype=np.int16)
         return (pcm.astype(np.float32) / 32768.0)
 
     # -- fixed-duration capture (VAD disabled) ------------------------------- #
-    def _record_fixed(self, seconds: float):
-        import numpy as np
+    def _record_fixed(self, seconds: float) -> np.ndarray:
         import sounddevice as sd
 
         sr = self.cfg.sample_rate
@@ -77,7 +88,7 @@ class AudioCapture:
         return audio.reshape(-1)
 
 
-def play(samples, sample_rate: int, device=None) -> None:
+def play(samples: np.ndarray, sample_rate: int, device: int | str | None = None) -> None:
     """Play float32 samples on the speaker, blocking until done."""
     import sounddevice as sd
 

@@ -9,11 +9,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import TypedDict
 
 import chess
 
-from .engine import ChessEngine, AnalysisResult
+from .engine import AnalysisResult, ChessEngine
 
 PIECE_VALUES = {
     chess.PAWN: 1, chess.KNIGHT: 3, chess.BISHOP: 3,
@@ -21,7 +21,36 @@ PIECE_VALUES = {
 }
 
 
-def material_balance(board: chess.Board) -> dict:
+class MaterialBalance(TypedDict):
+    white: int           # summed piece values (kings excluded)
+    black: int
+    diff: int            # white - black (signed)
+    leader: str          # "white" | "black" | "even"
+
+
+class PositionFacts(TypedDict):
+    """Ground-truth facts about a position (produced by `describe_position`).
+
+    The contract between analysis and the NLU layer: the SLM and the
+    deterministic fallbacks are handed these facts and must not invent others.
+    """
+
+    turn: str                    # "white" | "black"
+    fullmove: int
+    phase: str                   # "opening" | "middlegame" | "endgame"
+    in_check: bool
+    legal_moves: int
+    material: MaterialBalance
+    score_cp: int | None         # centipawns, White's POV (None if mate/unclear)
+    mate_in: int | None          # +ve = White mates, -ve = Black mates
+    verdict: str                 # human-readable evaluation
+    best_move_san: str | None
+    pv_sans: list[str]           # principal variation in SAN
+    last_move_san: str | None
+    game_over: bool
+
+
+def material_balance(board: chess.Board) -> MaterialBalance:
     white = sum(PIECE_VALUES[p.piece_type]
                 for p in board.piece_map().values() if p.color == chess.WHITE)
     black = sum(PIECE_VALUES[p.piece_type]
@@ -44,7 +73,7 @@ def game_phase(board: chess.Board) -> str:
     return "middlegame"
 
 
-def eval_verdict(score_cp: Optional[int], mate_in: Optional[int]) -> str:
+def eval_verdict(score_cp: int | None, mate_in: int | None) -> str:
     if mate_in is not None:
         side = "White" if mate_in > 0 else "Black"
         return f"{side} has a forced mate in {abs(mate_in)}"
@@ -75,8 +104,8 @@ def _pv_sans(board: chess.Board, pv: list[chess.Move], limit: int = 4) -> list[s
 def describe_position(
     board: chess.Board,
     engine: ChessEngine,
-    last_move_san: Optional[str] = None,
-) -> dict:
+    last_move_san: str | None = None,
+) -> PositionFacts:
     """Build a dict of ground-truth facts about the current position."""
     analysis: AnalysisResult = engine.analyse(board)
     material = material_balance(board)
@@ -85,7 +114,7 @@ def describe_position(
     if analysis.best_move and analysis.best_move in board.legal_moves:
         best_san = board.san(analysis.best_move)
 
-    facts = {
+    facts: PositionFacts = {
         "turn": "white" if board.turn == chess.WHITE else "black",
         "fullmove": board.fullmove_number,
         "phase": game_phase(board),
@@ -103,7 +132,7 @@ def describe_position(
     return facts
 
 
-def facts_to_summary(facts: dict) -> str:
+def facts_to_summary(facts: PositionFacts) -> str:
     """Deterministic spoken-style summary of the facts (SLM-free fallback)."""
     if facts.get("game_over"):
         return "The game is over."
@@ -122,8 +151,9 @@ def facts_to_summary(facts: dict) -> str:
     if facts["in_check"]:
         parts.append(f"{facts['turn'].capitalize()} is in check.")
 
-    if facts.get("best_move_san"):
-        line = facts.get("pv_sans") or [facts["best_move_san"]]
+    best = facts["best_move_san"]
+    if best:
+        line = facts["pv_sans"] or [best]
         parts.append("Best line: " + " ".join(line) + ".")
 
     return " ".join(parts)
@@ -148,7 +178,7 @@ _BEST_TOLERANCE = 15         # treat near-zero loss as "played the best move"
 @dataclass
 class MoveQuality:
     label: str                      # blunder|mistake|best|great|brilliant|normal|forced
-    cp_loss: Optional[int] = None   # centipawns lost vs the engine's best move
+    cp_loss: int | None = None   # centipawns lost vs the engine's best move
     is_sacrifice: bool = False
     only_good_move: bool = False
 
@@ -156,7 +186,7 @@ class MoveQuality:
         return self.label in {"blunder", "mistake", "best", "great", "brilliant"}
 
 
-def _to_cp_mover(res: Optional[AnalysisResult], mover_white: bool) -> Optional[int]:
+def _to_cp_mover(res: AnalysisResult | None, mover_white: bool) -> int | None:
     """Collapse an AnalysisResult (White's POV) to centipawns from the mover's POV."""
     if res is None:
         return None
@@ -186,11 +216,12 @@ def _offers_material(board_before: chess.Board, move: chess.Move) -> bool:
     to = move.to_square
     defenders = after.attackers(mover, to)
     # A king can't capture a defended piece, so it isn't a real threat then.
-    attacker_vals = [
-        PIECE_VALUES[after.piece_at(s).piece_type]
-        for s in after.attackers(not mover, to)
-        if not (after.piece_at(s).piece_type == chess.KING and defenders)
-    ]
+    attacker_vals = []
+    for s in after.attackers(not mover, to):
+        attacker = after.piece_at(s)
+        assert attacker is not None  # attacker squares are occupied by definition
+        if not (attacker.piece_type == chess.KING and defenders):
+            attacker_vals.append(PIECE_VALUES[attacker.piece_type])
     if not attacker_vals:
         return False
     min_attacker = min(attacker_vals)
@@ -220,7 +251,7 @@ def classify_move_quality(engine: ChessEngine, board_before: chess.Board,
     after = board_before.copy()
     after.push(move)
     if after.is_checkmate():
-        played_cp = _MATE_CP
+        played_cp: int | None = _MATE_CP
     else:
         # The multi-PV search already scored its lines; if the played move is one
         # of them, reuse that score rather than paying for a second search. The
@@ -287,7 +318,7 @@ def _is_outpost(board: chess.Board, sq: int, color: bool) -> bool:
     return True
 
 
-def _pin_against_king(board: chess.Board, from_sq: int, color: bool) -> Optional[int]:
+def _pin_against_king(board: chess.Board, from_sq: int, color: bool) -> int | None:
     """Square of an enemy piece the slider on `from_sq` pins to its king, if any."""
     king_sq = board.king(not color)
     if king_sq is None:
@@ -320,10 +351,13 @@ def find_tactics(board_after: chess.Board, mover: bool) -> list[str]:
     moved_ours = mp is not None and mp.color == mover
 
     def name(square: int) -> str:
-        return f"the {chess.piece_name(board_after.piece_at(square).piece_type)} on {chess.square_name(square)}"
+        piece = board_after.piece_at(square)
+        assert piece is not None  # name() is only called for occupied squares
+        return f"the {chess.piece_name(piece.piece_type)} on {chess.square_name(square)}"
 
     # Fork: the moved piece attacks >= 2 valuable enemy pieces (or king + piece).
     if moved_ours:
+        assert mp is not None and to is not None   # moved_ours implies both are set
         targets = [
             s for s in board_after.attacks(to)
             if (p := board_after.piece_at(s)) and p.color == opp
@@ -350,13 +384,14 @@ def find_tactics(board_after: chess.Board, mover: bool) -> list[str]:
     if board_after.is_check() and not any("forks" in m for m in motifs):
         motifs.append("it gives check")
 
-    if moved_ours and mp.piece_type == chess.KNIGHT and _is_outpost(board_after, to, mover):
-        motifs.append(f"the knight on {chess.square_name(to)} sits on an outpost")
-
-    if moved_ours and mp.piece_type in (chess.BISHOP, chess.ROOK, chess.QUEEN):
-        pinned = _pin_against_king(board_after, to, mover)
-        if pinned is not None:
-            motifs.append(f"{name(pinned)} is pinned to the king")
+    if moved_ours:
+        assert mp is not None and to is not None
+        if mp.piece_type == chess.KNIGHT and _is_outpost(board_after, to, mover):
+            motifs.append(f"the knight on {chess.square_name(to)} sits on an outpost")
+        elif mp.piece_type in (chess.BISHOP, chess.ROOK, chess.QUEEN):
+            pinned = _pin_against_king(board_after, to, mover)
+            if pinned is not None:
+                motifs.append(f"{name(pinned)} is pinned to the king")
 
     return motifs
 

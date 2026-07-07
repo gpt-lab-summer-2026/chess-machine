@@ -53,3 +53,21 @@ def test_scalar_where_section_expected_rejected(tmp_path):
     p.write_text("app: 5\n", encoding="utf-8")
     with pytest.raises(TypeError):
         load_config(p)
+
+
+def test_invalid_geometry_rejected(tmp_path):
+    # A calibration typo (non-positive square pitch) should fail fast.
+    p = tmp_path / "c.yaml"
+    p.write_text("motion:\n  geometry:\n    square_pitch_mm: -1\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        load_config(p)
+
+
+def test_travel_below_pick_height_rejected(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(
+        "motion:\n  geometry:\n    travel_height_mm: 1.0\n    pick_height_mm: 5.0\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        load_config(p)
