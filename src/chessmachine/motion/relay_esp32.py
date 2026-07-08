@@ -1,18 +1,19 @@
 """Relay/DC-motor prototype transport (firmware/esp32_dc_prototype).
 
-Speaks the tiny line protocol of the prototype firmware, which drives ONE brushed
-DC motor through a 2-channel relay H-bridge:
+Speaks the tiny line protocol of the prototype firmware, which drives THREE
+brushed DC motors, each through a 2-channel relay H-bridge (<m> = motor 1..3):
 
-    ->  PING        <-  OK PONG
-    ->  FWD <ms>    <-  OK      (run forward ms, then auto-stop; emits EVT DONE)
-    ->  REV <ms>    <-  OK      (run reverse ms, then auto-stop)
-    ->  STOP        <-  OK
-    ->  ESTOP       <-  OK ESTOP
-    ->  STATUS      <-  OK DIR<F|R|S> RUN<0|1> ESTOP<0|1>
+    ->  PING          <-  OK PONG
+    ->  FWD <m> <ms>  <-  OK      (motor m forward ms, then auto-stop; EVT DONE M<m>)
+    ->  REV <m> <ms>  <-  OK      (motor m reverse ms, then auto-stop)
+    ->  STOP [m]      <-  OK      (stop motor m, or all motors if omitted)
+    ->  ESTOP         <-  OK ESTOP
+    ->  STATUS        <-  OK M1:<F|R|S> M2:<F|R|S> M3:<F|R|S> ESTOP<0|1>
 
 This is a bring-up backend, NOT the crane. It cannot position a head, so the
 pick-and-place primitives (`move_xz`/`set_pulley`/`magnet`) are no-ops — the
-actual motion is a timed pulse issued by `RelayChoreographer` via `drive()`.
+actual motion is a timed pulse issued via `drive()`. `RelayChoreographer` drives
+motor 1 by default; the jog tool (scripts/relay_jog.py) selects any motor.
 Lines beginning with '#' (debug) or 'EVT' (async event) are logged and ignored.
 """
 from __future__ import annotations
@@ -84,18 +85,28 @@ class RelayMotion(MotionController):
             log.debug("relay(unparsed): %s", resp)
 
     # -- prototype motor control --------------------------------------------- #
-    def drive(self, forward: bool, ms: int) -> None:
-        """Pulse the motor for `ms` and block until it has stopped.
+    def drive(self, forward: bool, ms: int, motor: int = 1) -> None:
+        """Pulse `motor` (1-based) for `ms` and block until it has stopped.
 
         The firmware auto-stops after `ms` (it replies OK immediately), so we
         wait out the run here to keep the call blocking like the crane backend.
         """
         ms = max(0, int(ms))
-        self._command(("FWD" if forward else "REV") + f" {ms}")
+        self._command(("FWD" if forward else "REV") + f" {int(motor)} {ms}")
         time.sleep(ms / 1000.0 + 0.05)  # let the timed run finish before returning
 
-    def stop(self) -> None:
-        self._command("STOP")
+    def stop(self, motor: Optional[int] = None) -> None:
+        """Stop one motor, or all motors (+ release the stepper) if `motor` is None."""
+        self._command("STOP" if motor is None else f"STOP {int(motor)}")
+
+    def step(self, steps: int, delay_ms: Optional[int] = None) -> None:
+        """Move the stepper `steps` (signed; +/- selects direction) and block
+        until it finishes. The firmware steps synchronously, so we allow a reply
+        window proportional to the move."""
+        steps = int(steps)
+        per = int(delay_ms) if delay_ms is not None else 2
+        line = f"STEP {steps}" + (f" {per}" if delay_ms is not None else "")
+        self._command(line, timeout=abs(steps) * per / 1000.0 + 2.0)
 
     def estop(self) -> None:
         self._command("ESTOP", expect="ESTOP")
@@ -106,12 +117,17 @@ class RelayMotion(MotionController):
 
     def status(self) -> dict:
         payload = self._command("STATUS")
-        out: dict = {}
+        out: dict = {"motors": {}}
         for tok in payload.split():
-            if tok.startswith("DIR"):
-                out["direction"] = {"F": "forward", "R": "reverse"}.get(tok[3:], "stopped")
-            elif tok.startswith("RUN"):
-                out["running"] = tok[3:] == "1"
+            if tok.startswith("STEP:"):                     # e.g. "STEP:-2048"
+                try:
+                    out["stepper_pos"] = int(tok[5:])
+                except ValueError:
+                    pass
+            elif tok.startswith("M") and ":" in tok:         # e.g. "M2:F"
+                idx, _, d = tok[1:].partition(":")
+                if idx.isdigit():
+                    out["motors"][int(idx)] = {"F": "forward", "R": "reverse"}.get(d, "stopped")
             elif tok.startswith("ESTOP"):
                 out["estopped"] = tok[5:] == "1"
         return out
