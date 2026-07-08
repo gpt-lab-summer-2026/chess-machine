@@ -20,14 +20,14 @@ def _on_board(cfg: GeometryConfig, p: Point) -> bool:
 
 def test_a1_is_origin():
     geo = BoardGeometry(GeometryConfig())
-    assert geo.name_to_point("a1") == Point(91.875, -83.125)
+    assert geo.name_to_point("a1") == Point(93.5, -94.5)
 
 
 def test_square_pitch():
-    geo = BoardGeometry(GeometryConfig())  # pitch 23.75, file->x, rank->z
-    assert geo.name_to_point("h1") == Point(91.875 + 7 * 23.75, -83.125)
-    assert geo.name_to_point("a8") == Point(91.875, -83.125 + 7 * 23.75)
-    assert geo.name_to_point("h8") == Point(91.875 + 7 * 23.75, -83.125 + 7 * 23.75)
+    geo = BoardGeometry(GeometryConfig())  # pitch 27, file->x, rank->z
+    assert geo.name_to_point("h1") == Point(93.5 + 7 * 27, -94.5)
+    assert geo.name_to_point("a8") == Point(93.5, -94.5 + 7 * 27)
+    assert geo.name_to_point("h8") == Point(93.5 + 7 * 27, -94.5 + 7 * 27)
 
 
 def test_every_square_is_inside_the_reachable_sector():
@@ -42,16 +42,16 @@ def test_every_square_is_inside_the_reachable_sector():
 def test_invert_file():
     geo = BoardGeometry(GeometryConfig(invert_file=True))
     # a-file now sits at the far end of the x-axis
-    assert geo.name_to_point("a1") == Point(91.875 + 7 * 23.75, -83.125)
-    assert geo.name_to_point("h1") == Point(91.875, -83.125)
+    assert geo.name_to_point("a1") == Point(93.5 + 7 * 27, -94.5)
+    assert geo.name_to_point("h1") == Point(93.5, -94.5)
 
 
 def test_axis_swap():
     geo = BoardGeometry(GeometryConfig(file_axis="z", rank_axis="x"))
     # files now run along z, ranks along x
-    assert geo.name_to_point("a1") == Point(91.875, -83.125)
-    assert geo.name_to_point("h1") == Point(91.875, -83.125 + 7 * 23.75)
-    assert geo.name_to_point("a8") == Point(91.875 + 7 * 23.75, -83.125)
+    assert geo.name_to_point("a1") == Point(93.5, -94.5)
+    assert geo.name_to_point("h1") == Point(93.5, -94.5 + 7 * 27)
+    assert geo.name_to_point("a8") == Point(93.5 + 7 * 27, -94.5)
 
 
 def test_graveyard_arcs_are_reachable_and_off_board():

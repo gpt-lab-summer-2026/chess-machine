@@ -22,7 +22,7 @@ def test_deep_merge(tmp_path):
     assert c.motion.geometry.square_pitch_mm == 20.0
     # untouched values keep their defaults
     assert c.app.auto_reply is True
-    assert c.motion.geometry.origin_x_mm == 91.875
+    assert c.motion.geometry.origin_x_mm == 93.5
 
 
 def test_partial_preset_override(tmp_path):

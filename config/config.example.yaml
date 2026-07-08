@@ -79,19 +79,19 @@ motion:
     # See docs/DESIGN.md for the annular-sector geometry budget.
     r_min_mm: 80.0          # inner reachable radius (crane body dead zone)
     r_max_mm: 300.0         # arm / railcart maximum reach
-    board_size_mm: 190.0    # square 8x8 side (<= ~202 max for this annulus)
-    square_pitch_mm: 23.75  # 190 mm board / 8
+    board_size_mm: 216.0    # square 8x8 side (far square centers ~298 mm <= r_max)
+    square_pitch_mm: 27.0   # 216 mm board / 8
     # Origin = center of a1 (near edge at r_min, board centered on the bisector).
-    origin_x_mm: 91.875
-    origin_z_mm: -83.125
+    origin_x_mm: 93.5
+    origin_z_mm: -94.5
     file_axis: x            # files a..h run along this axis (x|z)
     rank_axis: z            # ranks 1..8 run along this axis
     invert_file: false
     invert_rank: false
     travel_height_mm: 60.0  # pulley raised: clears pieces AND decouples magnetically
     pick_height_mm: 4.0     # pulley lowered: magnet touches a piece
-    # Captured-piece storage: two symmetric arcs in the leftover sector, beyond
-    # the board's ~286 mm far corners. 2 sides x 8 = 16 slots.
+    # Captured-piece storage: two symmetric arcs in the leftover sector, at angles
+    # that clear the board's +/-108 mm z-extent. 2 sides x 8 = 16 slots.
     graveyard_radius_mm: 293.0
     graveyard_slots_per_side: 8
     graveyard_inner_deg: 26.0

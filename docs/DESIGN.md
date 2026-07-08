@@ -62,8 +62,8 @@ wedges hold the graveyards.
               ·          \
       ┌───────────────┐   ·   r_max = 300
       │  a8 ...... h8  │    ·
-      │   190 mm 8x8   │     ·
-      │  square board  │     ·  sweep ≈ 100°
+      │   216 mm 8x8   │     ·
+      │  square board  │     ·  sweep ≈ 107°
       │  a1 ...... h1  │    ·
       └───────────────┘   ·
         near edge          /
@@ -71,27 +71,32 @@ wedges hold the graveyards.
                   ╳  ← crane pivot (origin; dead zone r<80)
 ```
 
-**Sizing.** With the near edge at `r_min` and the far corners on `r_max`, the
-largest square has side `s` solving `(r_min+s)² + (s/2)² = r_max²`. For
-`r_min=80, r_max=300` that maximum is ~202 mm. We chose **190 mm** (a small
-margin) so an outer band stays free for the graveyard. The resulting numbers are
-the defaults in `config.py` / `config.example.yaml`:
+**Sizing.** Only the **square centers** must be reachable — a magnet never visits
+the empty board corners — so the binding constraint is the far *centers* on
+`r_max`. The h8/a8 centers sit at `hypot(r_min + 7.5·pitch, 3.5·pitch)`; keeping
+that ≤ `r_max` gives a maximum side of ~218 mm for `r_min=80, r_max=300`. We use
+**216 mm** (a hair under the max, matching the physical board). The board's
+*physical* far corners then reach ~315 mm and overhang the annulus, but carry no
+piece, so that's harmless. The resulting numbers are the defaults in `config.py` /
+`config.example.yaml`:
 
 | Param | Value | Note |
 |---|---|---|
 | `r_min_mm`, `r_max_mm` | 80, 300 | reachable annulus |
-| `board_size_mm` | 190 | square side (≤ ~202 max) |
-| `square_pitch_mm` | 23.75 | 190 mm / 8 |
-| `origin_x_mm`, `origin_z_mm` | 91.875, −83.125 | center of a1 (near edge at r_min, board on the bisector) |
-| board far corners | ~286 mm | `hypot(270, 95)`, inside r_max ✓ |
-| sweep | ~100° | `2·atan((s/2)/r_min)` from the near corners |
-| `graveyard_radius_mm` | 293 | arc beyond the corners, ≤ r_max |
+| `board_size_mm` | 216 | square side (≤ ~218 max, far *centers* on r_max) |
+| `square_pitch_mm` | 27 | 216 mm / 8 |
+| `origin_x_mm`, `origin_z_mm` | 93.5, −94.5 | center of a1 (near edge at r_min, board on the bisector) |
+| far square centers | ~298 mm | `hypot(282.5, 94.5)`, inside r_max ✓ |
+| physical far corners | ~315 mm | `hypot(296, 108)` — overhangs r_max, but no piece there |
+| sweep | ~107° | `2·atan((board/2)/r_min)` to the near corners; centers span ±45° |
+| `graveyard_radius_mm` | 293 | side arcs, clear of the board (below) |
 | `graveyard_slots_per_side` × 2 | 8 × 2 = **16** | two symmetric side arcs |
 
-**Why arcs beyond 286 mm clear the board.** A point at radius `r` is inside the
-board only if `r·cosθ ≤ 270` *and* `|r·sinθ| ≤ 95`; past the corner radius
-(`hypot(270,95)=286`) no angle satisfies both, so an arc at 293 mm never collides
-with a piece on the board.
+**Why the graveyard arcs clear the board.** A point is on the board only if its
+`|z| ≤ 108 mm` (half the 216 mm side). The graveyard slots sit at `θ ≥ 26°` on a
+293 mm arc, so `|z| = 293·sinθ ≥ 128 mm > 108` — every slot clears the board's
+z-extent (and so never collides with a piece), even though 293 mm is inside the
+~315 mm corner radius.
 
 **Capture ordering** is already implemented: on a capture the taken piece is
 lifted to storage *first*, then the capturing piece moves
@@ -109,7 +114,7 @@ second radius) — there is room in the side wedges at larger angles.
 Piece magnet: ≤5 mm radius (≤10 mm diameter), a small NdFeB disc (~2–3 mm thick)
 in a light 3D-printed piece. Three sub-questions:
 
-**(a) Will pieces pull on their neighbors?** Square centers are 23.75 mm apart
+**(a) Will pieces pull on their neighbors?** Square centers are 27 mm apart
 (roomier than the old 15 mm grid), so magnet edges are well separated. For magnets
 this small the inter-piece force at that gap is tiny. Crucially, if **every piece is mounted with the
 same pole up** (required so the overhead electromagnet treats them all alike),
@@ -123,7 +128,7 @@ squares.
 Pickup is the easy direction. The electromagnet runs at **6 V**; its rated hold is
 **2.5 kg at 12 V**, so even derated at 6 V it lifts a ≤**70 g** piece with enormous
 margin (and the piece's own NdFeB magnet bridges to the EM core for extra
-adhesion). The field is concentrated under the pole, so a neighbor 23.75 mm away
+adhesion). The field is concentrated under the pole, so a neighbor 27 mm away
 sees a much weaker field and stays put — **provided you only energize once
 centered over the target and lowered close.**
 
@@ -153,40 +158,45 @@ pulse.
 
 ### 4.3 Motor / actuator choice for the crane axes
 
-Both axes only **position a light head** (pulley + electromagnet + at most one
-carried piece). They never push pieces or bear a holding load. So optimize for
-**speed, low cost, and low friction**, not force or holding torque.
+Both positioning axes only **position a light head** (the cart carries the winch,
+pulley, and electromagnet + at most one piece). They never push pieces or bear a
+holding load. The real build drives them with **geared brushed DC motors**, each
+through a **2-relay SPDT H-bridge**, positioned **open-loop by time** (no encoders)
+— cheap and simple for a light head. The winch is the exception: a stepper, so it
+can hold a precise height.
 
-- **Rotary base (θ).** A NEMA17 driving the base through a reduction (belt
-  ring/pinion or a small gearbox) so resolution and stiffness are adequate. The
-  firmware models this as `A_STEPS_PER_DEG = microsteps · gear_ratio / 360`. A
-  rotary endstop defines the home angle (`A_HOME_DEG`); soft limits bound the
-  ~100° sweep. The reduction also keeps the hanging cable from being yanked.
-- **Radial railcart (r).** ✅ **Belt-driven carriage on a linear rail along the
-  arm** — a stepper turns a GT2 pulley that drags a low-friction cart (MGN12 rail
-  or V-wheels). Exactly the "cart on a rail that doesn't push" idea: fast, cheap,
-  and matches the firmware's `R_STEPS_PER_MM` model (20T GT2 at 1/16 µstep ≈
-  **80 steps/mm**, the firmware default). A microswitch endstop at the inner end
-  defines `R_HOME_MM ≈ r_min`.
-  - ⚠️ **Lead-screw "linear actuators"** work but are the wrong tool here: slow,
-    self-locking, and high push force you don't need.
+- **Rotary base (θ → protocol `A`).** Geared DC motor via an H-bridge. The firmware
+  times each move from a measured slew rate — **0.1887 rad/s (~92.5 ms/deg)** with a
+  ~50 ms start deadtime — so `A_MS_PER_DEG` replaces the old `A_STEPS_PER_DEG`. A
+  rotary endstop defines the home angle (`A_HOME_DEG`); soft limits bound the ~107°
+  sweep.
+- **Radial railcart (r → protocol `R`).** Geared DC motor via an H-bridge, dragging a
+  low-friction cart along the arm (the cart also carries the winch stepper). Timed
+  from the measured traverse — **315 mm in 1020 ms of motion (~3.24 ms/mm)** plus a
+  30 ms deadzone — so `R_MS_PER_MM` replaces `R_STEPS_PER_MM`. A microswitch at the
+  inner end defines `R_HOME_MM ≈ r_min`.
+  - ⚠️ Relays are bang-bang (full speed / off): **no speed control**, so the
+    protocol's feed `F` is ignored on these axes — travel time is fixed by the motor.
+- **Winch (pulley `H`).** A **28BYJ-48 stepper via a ULN2003**, step-counted, with a
+  top endstop for homing. It **holds its height between moves** (coils energized) so
+  the hanging load can't back-drive it.
 
-**Guide vs drive — keep the MGN12.** The MGN12 rail + carriage is the *guide* on
-the arm (bears load, keeps motion straight and low-friction); it is *not* the
-*drive*. Pair it with the belt — complementary, not alternatives.
+**Guide vs drive.** A linear rail/carriage on the arm is the *guide* (bears load,
+keeps motion straight and low-friction); the DC motor is the *drive*. Complementary.
 
-**Resolution.** 20T GT2 = 40 mm/rev; NEMA17 (200 steps) at 1/16 µstep =
-**80 steps/mm → 0.0125 mm/step** radially, ~1000× finer than a 23.75 mm cell
-needs. Angular resolution depends on the base reduction; size it so one microstep
-is well under a square. Steppers are open-loop — fine at this scale; if anything
-slips, re-home.
+**Open-loop accuracy.** Timed DC positioning has no feedback, so error accumulates
+across a game (relay lag, coasting, wheel slip). Mitigations: **re-home between
+phases** to zero it out, keep the per-move rates/deadzones calibrated, and lean on
+the recessed square wells (§4.2) to capture the last few mm. If drift becomes a
+problem, the natural upgrade is wheel encoders (closed-loop) — but bench-tune the
+timing first.
 
-**Why polar fits this build.** A crane gives a long reach (~30 cm arm) from a
-small footprint, and the two natural axes (rotate + extend) map directly to
-(θ, r). The host converts the planar board coordinate to polar
-(`r = hypot(x,z)`, `θ = atan2(z,x)`), so the firmware stays a dumb two-axis
-positioner. Keep acceleration moderate so the hanging electromagnet doesn't swing
-(firmware `ACCEL`, host `settle_ms` are tunable).
+**Why polar fits this build.** A crane gives a long reach (~30 cm arm) from a small
+footprint, and the two natural axes (rotate + extend) map directly to (θ, r). The
+host converts the planar board coordinate to polar (`r = hypot(x,z)`,
+`θ = atan2(z,x)`), so the firmware stays a dumb two-axis positioner. Keep moves
+gentle so the hanging electromagnet doesn't swing (firmware deadzones/rates, host
+`settle_ms` are tunable).
 
 ## 5. Open questions / risks
 
@@ -198,11 +208,12 @@ positioner. Keep acceleration moderate so the hanging electromagnet doesn't swin
 - **Crane dimensions** — `r_min` (dead radius around the base) and `r_max` (arm
   reach) are estimates (80 / 300 mm); measure the real crane and re-run
   `scripts/calibrate.py`. Every board/graveyard coordinate follows from them.
-- **Rotary reduction** — the base needs enough gear ratio that one microstep is
-  well under a square; sets `A_STEPS_PER_DEG`.
+- **DC axis calibration** — measure each axis's rate and start deadtime (deg/s + ms
+  for rotary, mm/s + ms for the cart) and set `A_MS_PER_DEG` / `R_MS_PER_MM`; re-check
+  after any gearing or supply-voltage change.
 - **Magnet spec** — the 6 V electromagnet's pull curve at the real air gap;
   bench-test before finalizing pick/travel heights.
-- **Placement precision** — 23.75 mm cells are forgiving, but cable swing still
+- **Placement precision** — 27 mm cells are forgiving, but cable swing still
   argues for recessed wells at square centers (planned mitigation).
 - **STT move accuracy** — distil-whisper may mishear move words; mitigated by the
   legality-filtered parser, which rejects anything that isn't a legal move.

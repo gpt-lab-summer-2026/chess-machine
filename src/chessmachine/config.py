@@ -146,14 +146,15 @@ class GeometryConfig:
     r_min_mm: float = 80.0            # inner reachable radius (crane body dead zone)
     r_max_mm: float = 300.0           # arm / railcart maximum reach
     # Board: a square centered on the sector bisector (+X axis), near edge at
-    # r_min. 190 mm side -> far corners reach ~286 mm, sweep ~100deg. See docs/DESIGN.md.
-    square_pitch_mm: float = 23.75    # 190 mm board / 8 squares
-    board_size_mm: float = 190.0      # physical 8x8 side
+    # r_min. 216 mm side -> far SQUARE CENTERS reach ~298 mm (<= r_max); the
+    # physical corners overhang the annulus but hold no piece. See docs/DESIGN.md.
+    square_pitch_mm: float = 27.0     # 216 mm board / 8 squares
+    board_size_mm: float = 216.0      # physical 8x8 side
     # Origin = (X,Z) of the center of square a1. Default places the board square
     # symmetric about the bisector with its near edge at r_min:
-    #   a1 = (r_min + pitch/2, -board/2 + pitch/2) = (91.875, -83.125).
-    origin_x_mm: float = 91.875
-    origin_z_mm: float = -83.125
+    #   a1 = (r_min + pitch/2, -board/2 + pitch/2) = (93.5, -94.5).
+    origin_x_mm: float = 93.5
+    origin_z_mm: float = -94.5
     # Which physical (planar) axis the files (a..h) and ranks (1..8) run along.
     file_axis: str = "x"              # "x" or "z"
     rank_axis: str = "z"              # the other one
@@ -163,11 +164,11 @@ class GeometryConfig:
     travel_height_mm: float = 60.0    # cable retracted: clears the tallest piece
     pick_height_mm: float = 4.0       # cable lowered: magnet contacts a piece
     # Off-board storage (graveyard): two symmetric arcs in the leftover sector,
-    # at a radius beyond the board's ~286 mm far corners (so any arc out here
-    # clears the board entirely). 2 sides x 8 = 16 slots. A full reset needs 32
-    # slots, so with 16 the machine asks for a manual reset (see
+    # at angles where |r*sin(theta)| exceeds the board's +/-108 mm z-extent (so any
+    # arc out here clears the board entirely). 2 sides x 8 = 16 slots. A full reset
+    # needs 32 slots, so with 16 the machine asks for a manual reset (see
     # Choreographer.setup_starting_position).
-    graveyard_radius_mm: float = 293.0   # within r_max, beyond the board corners
+    graveyard_radius_mm: float = 293.0   # within r_max; its arc clears the board z-extent
     graveyard_slots_per_side: int = 8
     graveyard_inner_deg: float = 26.0    # slot angle nearest the bisector
     graveyard_outer_deg: float = 49.0    # slot angle nearest the sector edge
