@@ -36,7 +36,9 @@ class FakeSerial:
 
 
 def _motion(replies=()):
-    sm = SerialMotion(SerialConfig(timeout_s=0.05, home_timeout_s=0.05))
+    # winch_offset_mm=0: these check the plain polar conversion + protocol framing;
+    # the offset correction is covered separately in test_serial_offset.py.
+    sm = SerialMotion(SerialConfig(timeout_s=0.05, home_timeout_s=0.05, winch_offset_mm=0.0))
     sm._ser = FakeSerial(replies)
     return sm
 

@@ -334,3 +334,39 @@ def test_actuation_failure_is_surfaced_not_swallowed():
     m.handle("e4")
     assert m.game.history[-1][1] == "e4"          # move applied logically (no rollback)
     assert any("check the board" in l.lower() for l in tts.lines)
+
+
+def test_recalibrate_command_rehomes():
+    m, _ = make(auto_reply=False)
+    m.choreo.ctl.ops.clear()                      # drop the start() home + startup ops
+    reply = m.handle("recalibrate the crane")
+    assert ("home",) in m.choreo.ctl.ops          # re-homed on command
+    assert "re-homed" in reply.lower()
+
+
+def test_capture_triggers_rehome():
+    m, _ = make(auto_reply=False)
+    m.handle("e4")                                # white (human)
+    m.handle("d5")                                # black
+    m.choreo.ctl.ops.clear()
+    m.handle("exd5")                              # white captures -> re-home
+    assert m.game.history[-1][1] == "exd5"        # capture applied
+    assert ("home",) in m.choreo.ctl.ops          # re-homed after the capture
+
+
+def test_non_capture_move_does_not_rehome():
+    m, _ = make(auto_reply=False)
+    m.choreo.ctl.ops.clear()
+    m.handle("e4")                                # quiet move
+    assert ("home",) not in m.choreo.ctl.ops
+
+
+def test_rehome_on_capture_can_be_disabled():
+    m, _ = make(auto_reply=False)
+    m.cfg.app.rehome_on_capture = False
+    m.handle("e4")
+    m.handle("d5")
+    m.choreo.ctl.ops.clear()
+    m.handle("exd5")
+    assert m.game.history[-1][1] == "exd5"
+    assert ("home",) not in m.choreo.ctl.ops

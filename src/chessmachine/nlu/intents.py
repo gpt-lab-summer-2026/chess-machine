@@ -16,6 +16,7 @@ ACTIONS = {
     "status",           # speak score / whose turn
     "repeat",           # repeat the last spoken line
     "help",             # explain capabilities
+    "recalibrate",      # re-home the crane to correct open-loop drift
     "chitchat",         # general conversation
     "unknown",          # could not be understood
 }

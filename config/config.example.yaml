@@ -9,6 +9,7 @@ app:
   concurrent_actuation: true # speak the move + explanation while the crane moves
                              # (a capture's discard always finishes first)
   match_clock: true         # track the human's thinking time only (ask "status"/"score")
+  rehome_on_capture: true   # re-home the crane after each capture to zero open-loop drift
   log_level: INFO
 
 audio:
@@ -69,10 +70,13 @@ motion:
     port: /dev/ttyUSB0      # Windows: COM3
     baud: 115200
     pulse_ms: 800           # how long the motor runs per move
-  serial:                   # crane (stepper) backend — unused while backend: relay
+  serial:                   # crane (DC/stepper hybrid) backend — unused while backend: relay
     port: /dev/ttyUSB0      # Windows: COM3
     baud: 115200
     timeout_s: 5.0
+    winch_offset_mm: 33.0   # magnet hangs this far to the SIDE of the arm; the
+                            # transport aims the cart past the target to compensate.
+                            # Flip the sign if placements land on the wrong side; 0 = off.
   geometry:
     # Planar (x,z) mm with the ORIGIN AT THE CRANE PIVOT; the serial transport
     # converts to polar (r=hypot, theta=atan2) for the rotary + radial axes.

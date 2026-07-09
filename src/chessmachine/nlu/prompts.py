@@ -24,6 +24,8 @@ omit "color". Remember: if the user wants a color for THEMSELVES, you take the \
 other one.
 - "analyze": a question about the position (who is winning, best move, threats, \
 evaluation). Put the question text in "question".
+- "recalibrate": re-home the crane to correct mechanical drift (user says "re-home", \
+"recenter", "recalibrate", "home the crane").
 - "new_game", "undo", "resign", "status", "repeat", "help", "chitchat".
 
 Only fill "move", "difficulty", or "question" when relevant; otherwise omit them.
@@ -50,6 +52,7 @@ INTENT_EXAMPLES = [
     ("what's the best move here", '{"actions": [{"action": "analyze", "question": "best move"}]}'),
     ("let's start a new game", '{"actions": [{"action": "new_game"}]}'),
     ("take that back", '{"actions": [{"action": "undo"}]}'),
+    ("recenter the crane", '{"actions": [{"action": "recalibrate"}]}'),
 ]
 
 PHRASE_SYSTEM = """You are a friendly chess opponent speaking out loud. Answer the \

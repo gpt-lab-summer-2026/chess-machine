@@ -4,7 +4,9 @@ from chessmachine.motion.serial_esp32 import SerialMotion
 
 
 def _capture():
-    m = SerialMotion(SerialConfig())
+    # offset off here: these assert the plain polar conversion; the winch-offset
+    # correction has its own tests in test_serial_offset.py.
+    m = SerialMotion(SerialConfig(winch_offset_mm=0.0))
     sent: list[str] = []
     m._command = lambda line, **kw: sent.append(line) or ""  # type: ignore[assignment]
     return m, sent

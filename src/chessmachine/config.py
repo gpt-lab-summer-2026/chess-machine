@@ -119,6 +119,11 @@ class SerialConfig:
     timeout_s: float = 5.0
     connect_settle_s: float = 2.0     # ESP32 auto-resets when the port opens
     home_timeout_s: float = 60.0      # homing can be slow
+    # The electromagnet hangs a fixed distance to the SIDE of the arm (the winch's
+    # mounting offset), so the transport aims the CART past the target square by
+    # asin(offset/reach). Signed: flip the sign if placements land on the wrong
+    # side; 0 disables it. See serial_esp32._magnet_to_cart.
+    winch_offset_mm: float = 33.0
 
 
 @dataclass
@@ -207,6 +212,7 @@ class AppConfig:
     require_legal_confirmation: bool = True  # re-ask on illegal/ambiguous moves
     concurrent_actuation: bool = True  # speak the move/explanation while the crane moves
     match_clock: bool = True          # track the human's thinking time (their clock only)
+    rehome_on_capture: bool = True    # re-home after a capture to zero open-loop drift
     log_level: str = "INFO"
 
 

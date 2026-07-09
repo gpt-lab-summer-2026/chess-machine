@@ -5,8 +5,9 @@ blocks until the controller acknowledges with `OK` (or raises on `ERR`/timeout),
 so the host can sequence moves without tracking motor state itself.
 
 This is also where the planar (x,z) workspace is converted to the crane's polar
-axes: `move_xz` sends `r = hypot(x,z)` and `theta = atan2(z,x)` (degrees) in the
-pivot frame; the rotary base + radial railcart realize them.
+axes. `move_xz` maps the desired MAGNET position to the CART's polar target,
+compensating for the winch's fixed lateral offset from the arm (see
+`_magnet_to_cart`); the rotary base + radial railcart realize `r`/`theta`.
 
 Protocol (see docs/PROTOCOL.md):
     ->  PING                          <-  OK PONG
@@ -93,10 +94,30 @@ class SerialMotion(MotionController):
         self._command("HOME", expect="HOMED", timeout=self.cfg.home_timeout_s)
 
     def move_xz(self, x_mm: float, z_mm: float, feed: int | None = None) -> None:
-        # Planar (x,z) in the pivot frame -> polar (radial mm, rotary deg).
-        r = math.hypot(x_mm, z_mm)
-        a = math.degrees(math.atan2(z_mm, x_mm))
+        # Desired MAGNET position (planar, pivot frame) -> CART polar target.
+        r, a = self._magnet_to_cart(x_mm, z_mm, self.cfg.winch_offset_mm)
         self._command(f"MOVE R{r:.2f} A{a:.2f}{self._feed(feed)}")
+
+    @staticmethod
+    def _magnet_to_cart(x_mm: float, z_mm: float, offset_mm: float) -> tuple[float, float]:
+        """Map a desired magnet position (planar mm) to the cart's polar target
+        (r mm, angle degrees).
+
+        The magnet hangs `offset_mm` perpendicular to the arm, so pivot->cart (r),
+        cart->magnet (offset) and pivot->magnet (M) form a right triangle: the cart
+        sits at r = sqrt(M^2 - offset^2) and the arm swings past the target angle by
+        asin(offset/M). `offset_mm` is signed (picks the side); 0 disables it.
+        Falls back to the plain conversion if the target is closer than the offset.
+        """
+        m = math.hypot(x_mm, z_mm)
+        ang = math.atan2(z_mm, x_mm)
+        if offset_mm and m > abs(offset_mm):
+            r = math.sqrt(m * m - offset_mm * offset_mm)
+            a = math.degrees(ang + math.asin(offset_mm / m))
+        else:
+            r = m
+            a = math.degrees(ang)
+        return r, a
 
     def set_pulley(self, height_mm: float, feed: int | None = None) -> None:
         self._command(f"PULLEY H{height_mm:.2f}{self._feed(feed)}")

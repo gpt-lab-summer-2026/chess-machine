@@ -87,6 +87,9 @@ class RuleBasedNLU(NLU):
             return Intent("repeat", text=transcript)
         if _has(t, "help", "what can you do", "instructions"):
             return Intent("help", text=transcript)
+        if _has(t, "recalibrate", "re-calibrate", "calibrate", "re-home", "rehome",
+                "re-center", "recenter", "home the crane", "home yourself"):
+            return Intent("recalibrate", text=transcript)
 
         side = resolve_side_request(t)
         if side is not None:

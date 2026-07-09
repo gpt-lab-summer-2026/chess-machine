@@ -37,7 +37,8 @@ HELP_TEXT = (
     "You can tell me your move, like 'knight to f3' or 'e2 to e4'. "
     "Say 'your move' for me to play, ask 'who's winning' or 'what's the best move' "
     "for analysis, set difficulty to easy, medium, or hard, say 'switch sides' or "
-    "'I'll play black' to change colors, or say 'new game'."
+    "'I'll play black' to change colors, say 'recalibrate' if my placement drifts, "
+    "or say 'new game'."
 )
 QUIT_WORDS = {"quit", "exit", "stop", "goodbye", "q"}
 _AFFIRM_WORDS = {
@@ -171,6 +172,8 @@ class ChessMachine:
             return self._say(self._last_spoken or "I haven't said anything yet.")
         if a == "help":
             return self._say(HELP_TEXT)
+        if a == "recalibrate":
+            return self._do_recalibrate()
         if a == "chitchat":
             return self._say(self.nlu.small_talk(intent.text or "", self._context()))
         return self._say("Sorry, I didn't understand. Say a move, ask for analysis, "
@@ -337,7 +340,23 @@ class ChessMachine:
             text += " " + " ".join(notes)
         return self._say(text)
 
+    def _do_recalibrate(self) -> str:
+        """Voice-triggered re-home to correct accumulated open-loop drift."""
+        err = self._rehome()
+        return err or self._say("Re-homed and re-centered.")
+
     # -- helpers ------------------------------------------------------------- #
+    def _rehome(self) -> str:
+        """Re-home the crane to zero out open-loop drift. Safe mid-game: it only
+        re-references the head against the endstops (no piece is touched). Returns
+        "" on success, or an already-spoken error line on failure."""
+        try:
+            self.choreo.home()
+            return ""
+        except Exception:  # noqa: BLE001 - a failed re-home must not abort the turn
+            log.exception("Re-home failed")
+            return self._say("I couldn't re-home the crane; positions may have drifted.")
+
     def _play_move(self, move: chess.Move, prefix: str) -> str:
         """Actuate, narrate, and speak a move. With concurrent actuation the
         crane carries the piece while we compute and speak the explanation —
@@ -374,13 +393,20 @@ class ChessMachine:
             text += " " + self.game.result_text()
 
         self._say(text)                 # spoken while the crane is still moving
+        finished_ok = True
         if motion is not None:
             motion.join()               # don't begin the next move until actuation is done
             if motion_result is not None and motion_result["error"] is not None:
                 # The move is already applied logically, but the crane didn't
                 # finish — flag the possible desync rather than swallowing it.
+                finished_ok = False
                 self._say("I couldn't finish moving that piece — please check the "
                           "board matches the position before we continue.")
+        # A capture adds an extra pick-and-place (the discard to storage), so it's
+        # the biggest source of open-loop drift — re-home afterwards to re-zero.
+        # Skip it if actuation didn't finish, so we don't drag a stuck piece.
+        if finished_ok and self.cfg.app.rehome_on_capture and board_before.is_capture(move):
+            self._rehome()              # silent unless it fails
         return text
 
     def _spawn_motion(self, complete) -> tuple[threading.Thread, dict]:
