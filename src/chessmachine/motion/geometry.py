@@ -4,7 +4,9 @@ The frame's origin is the crane pivot; the transport converts each (x,z) to
 polar (r, theta) for the rotary base + radial railcart. The board itself is a
 flat grid, so squares map to a plane exactly as before: origin is the center of
 a1, files (a..h) and ranks (1..8) run along the two planar axes (config, with
-optional inversion) so the board can sit at any orientation in the sector.
+optional inversion), and `board_angle_deg` rotates the whole board about a1 — so
+the board can sit at any orientation in the sector, including corner-first
+(diagonal), where one corner is nearest the pivot and the opposite one is farthest.
 """
 from __future__ import annotations
 
@@ -46,10 +48,17 @@ class BoardGeometry:
         file_off = file_idx * self.cfg.square_pitch_mm
         rank_off = rank_idx * self.cfg.square_pitch_mm
 
+        # Offset from a1 along the two planar axes...
         if self.cfg.file_axis == "x":
-            return Point(self.cfg.origin_x_mm + file_off, self.cfg.origin_z_mm + rank_off)
-        # file runs along z, rank along x
-        return Point(self.cfg.origin_x_mm + rank_off, self.cfg.origin_z_mm + file_off)
+            dx, dz = file_off, rank_off
+        else:                                    # file runs along z, rank along x
+            dx, dz = rank_off, file_off
+        # ...then rotate the board about a1 (0 = axis-aligned; 135 = h8-near diagonal).
+        ang = math.radians(self.cfg.board_angle_deg)
+        if ang:
+            c, s = math.cos(ang), math.sin(ang)
+            dx, dz = c * dx - s * dz, s * dx + c * dz
+        return Point(self.cfg.origin_x_mm + dx, self.cfg.origin_z_mm + dz)
 
     def name_to_point(self, name: str) -> Point:
         return self.square_to_point(chess.parse_square(name))

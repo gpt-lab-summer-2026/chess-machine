@@ -52,51 +52,48 @@ classification (`classify_move`) is the bridge from chess rules to physical ops.
 ### 4.1 Geometry budget — fitting a square board in the crane's sector  ⚠️ binding constraint
 
 The crane reaches an **annular sector**: radius `r ∈ [r_min, r_max]` swept over an
-angle. `r_max ≈ 300 mm` is the arm/railcart reach; `r_min ≈ 80 mm` is the dead
-zone around the crane body (it can't reach its own base). The playable board is a
-**square centered on the sector's bisector**, near edge at `r_min`; the leftover
-wedges hold the graveyards.
+angle. `r_max ≈ 455 mm` is the crane's max **radius** (pivot → end of reach — *not*
+the 355 mm cart-travel span, which is a common mix-up); `r_min ≈ 80 mm` is the dead
+zone around the crane body. The board sits **corner-first (diagonal)**: the **h8
+corner is in the near deadzone**, the **a1 corner is farthest**, and the h8→a1
+diagonal runs along the sector's bisector (a8/h1 are the side corners; a8 on the
+right). `board_angle_deg = 135°` realizes it; the wedges beyond ±28° hold the graveyards.
 
 ```
-                 · · ·  ← graveyard arc (r≈293)
-              ·          \
-      ┌───────────────┐   ·   r_max = 300
-      │  a8 ...... h8  │    ·
-      │   216 mm 8x8   │     ·
-      │  square board  │     ·  sweep ≈ 107°
-      │  a1 ...... h1  │    ·
-      └───────────────┘   ·
-        near edge          /
-        at r_min=80   · · ·
-                  ╳  ← crane pivot (origin; dead zone r<80)
+                          · a1  (far corner, ~380 mm)
+                       ·     ·
+                 h1 ·   8×8     · a8            ·  r_max = 455
+                       · board ·             ·
+                          · ·             ·  sweep ≈ ±28°
+                          h8           ·
+                    (near, ~120 mm)  ·  graveyard (θ 37–52°)
+              ╳ pivot   (dead zone r < 80)
 ```
 
-**Sizing.** Only the **square centers** must be reachable — a magnet never visits
-the empty board corners — so the binding constraint is the far *centers* on
-`r_max`. The h8/a8 centers sit at `hypot(r_min + 7.5·pitch, 3.5·pitch)`; keeping
-that ≤ `r_max` gives a maximum side of ~218 mm for `r_min=80, r_max=300`. We use
-**216 mm** (a hair under the max, matching the physical board). The board's
-*physical* far corners then reach ~315 mm and overhang the annulus, but carry no
-piece, so that's harmless. The resulting numbers are the defaults in `config.py` /
-`config.example.yaml`:
+**Sizing.** Corner-first, the **board diagonal** is the binding radial dimension
+(not the side): near corner toward the deadzone, far corner out toward reach. The
+board's centre-to-centre diagonal is `7·pitch·√2 ≈ 260 mm`, so with h8's centre at
+the measured **~120 mm**, a1 lands at **~380 mm** — comfortably inside the 455 mm
+radius (~75 mm to spare). The winch's 33 mm lateral offset only shrinks the cart
+radius slightly (`cart = √(M²−33²)`), so the near corner still clears the 80 mm
+deadzone (h8 cart ≈ 115 mm). These live in `config.example.yaml` / `config.yaml`
+(the code defaults in `config.py` stay a generic axis-aligned board):
 
 | Param | Value | Note |
 |---|---|---|
-| `r_min_mm`, `r_max_mm` | 80, 300 | reachable annulus |
-| `board_size_mm` | 216 | square side (≤ ~218 max, far *centers* on r_max) |
-| `square_pitch_mm` | 27 | 216 mm / 8 |
-| `origin_x_mm`, `origin_z_mm` | 93.5, −94.5 | center of a1 (near edge at r_min, board on the bisector) |
-| far square centers | ~298 mm | `hypot(282.5, 94.5)`, inside r_max ✓ |
-| physical far corners | ~315 mm | `hypot(296, 108)` — overhangs r_max, but no piece there |
-| sweep | ~107° | `2·atan((board/2)/r_min)` to the near corners; centers span ±45° |
-| `graveyard_radius_mm` | 293 | side arcs, clear of the board (below) |
-| `graveyard_slots_per_side` × 2 | 8 × 2 = **16** | two symmetric side arcs |
+| `r_min_mm`, `r_max_mm` | 80, 455 | reachable annulus (455 = max radius, not the 355 travel span) |
+| `board_angle_deg` | 135 | corner-first diagonal (h8 near, a1 far, a8 right) |
+| `board_size_mm` | 210.4 | square side = 297.5 mm diagonal / √2 |
+| `square_pitch_mm` | 26.30 | 210.4 / 8 |
+| `origin_x_mm`, `origin_z_mm` | 380, 0 | centre of a1 (far corner, on the bisector) |
+| h8 centre / a1 centre | ~120 / ~380 mm | near / far, both on the bisector |
+| sweep | ±28° | side corners a8/h1 at ~`atan2(130, 250)`; well inside ±55° |
+| `graveyard_*` | 293 mm, 37–52° | side arcs beyond the ±28° sweep (**TODO: rework**) |
 
-**Why the graveyard arcs clear the board.** A point is on the board only if its
-`|z| ≤ 108 mm` (half the 216 mm side). The graveyard slots sit at `θ ≥ 26°` on a
-293 mm arc, so `|z| = 293·sinθ ≥ 128 mm > 108` — every slot clears the board's
-z-extent (and so never collides with a piece), even though 293 mm is inside the
-~315 mm corner radius.
+**Note.** The graveyard still needs a proper pass for this diagonal layout (angles
+are set outside the sweep as an interim). The rotary axis only sweeps ±28° for the
+board, so the winch offset (which adds ≤ ~asin(33/120) ≈ 16° at the nearest square)
+stays well inside the ±55° firmware limit.
 
 **Capture ordering** is already implemented: on a capture the taken piece is
 lifted to storage *first*, then the capturing piece moves

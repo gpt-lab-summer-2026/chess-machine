@@ -75,3 +75,26 @@ def test_graveyard_arcs_are_reachable_and_off_board():
 def test_invalid_axes_rejected():
     with pytest.raises(ValueError):
         BoardGeometry(GeometryConfig(file_axis="x", rank_axis="x"))
+
+
+def test_diagonal_board_angle_layout():
+    # Corner-first (diagonal) real-machine layout: h8 near, a1 far on the bisector,
+    # a8 on the right (-z). Mirrors config.example.yaml.
+    cfg = GeometryConfig(board_angle_deg=135.0, origin_x_mm=380.0, origin_z_mm=0.0,
+                         square_pitch_mm=26.30, r_min_mm=80.0, r_max_mm=455.0)
+    geo = BoardGeometry(cfg)
+    a1, h8 = geo.name_to_point("a1"), geo.name_to_point("h8")
+    a8, h1 = geo.name_to_point("a8"), geo.name_to_point("h1")
+    # far/near corners sit on the bisector (z=0); a1 is farthest, h8 nearest
+    assert a1.z == pytest.approx(0.0, abs=1e-6)
+    assert h8.z == pytest.approx(0.0, abs=1e-6)
+    assert _r(a1) == pytest.approx(380.0)
+    assert _r(h8) == pytest.approx(120.0, abs=0.5)   # near corner ~120 mm out
+    assert _r(h8) < _r(a1)
+    # a8 on the right (-z), h1 on the left (+z), mirror images across the bisector
+    assert a8.z < 0 < h1.z
+    assert a8.z == pytest.approx(-h1.z)
+    assert _r(a8) == pytest.approx(_r(h1))
+    # every square center falls inside the reachable annulus
+    for sq in chess.SQUARES:
+        assert cfg.r_min_mm <= _r(geo.square_to_point(sq)) <= cfg.r_max_mm

@@ -2,14 +2,16 @@
 
 ## Mechanism
 
-- **Board:** 3D-printed, **216 mm** square 8×8 grid (**27 mm square pitch**),
-  sitting inside the crane's reach. Checkers-style pieces (≤70 g), each with a
-  magnet inside. See [DESIGN.md §4.1](DESIGN.md) for the geometry budget.
-- **Crane:** a ~48 cm-high rotary base carries a ~30 cm arm; a **railcart runs
-  along the arm**. Rotation is the **angular** coordinate (θ); the railcart is
-  the **radial** coordinate (r). The reachable workspace is an **annular sector**
-  (r ∈ [80, 300] mm, sweep ~107°). The board is a square centered on the sector;
-  the leftover wedges hold the graveyards.
+- **Board:** 3D-printed, **~210 mm** square 8×8 grid (**~26 mm pitch**, 297.5 mm
+  diagonal), sitting inside the crane's reach. Checkers-style pieces (≤70 g), each
+  with a magnet inside. See [DESIGN.md §4.1](DESIGN.md) for the geometry budget.
+- **Crane:** a rotary base carries an arm; a **railcart runs along the arm**.
+  Rotation is the **angular** coordinate (θ); the railcart is the **radial**
+  coordinate (r). The reachable workspace is an **annular sector** (r ∈ [80,
+  455] mm — 455 is the max radius, not the 355 mm cart travel). The board sits
+  **corner-first (diagonal)** — h8 in the near deadzone, a1 farthest — so the sweep
+  is only **~±28°**; the wedges beyond it hold the
+  graveyards.
 - **Pulley:** a winch raises/lowers a **6 V electromagnet on a cable** to pick
   up and place pieces from above.
 - **Storage ("graveyard"):** two symmetric arcs in the leftover sector, beyond
@@ -39,15 +41,17 @@ by [`geometry.py`](../src/chessmachine/motion/geometry.py), in a frame whose
 **origin is the crane pivot**:
 
 ```
-point(file, rank) = origin + pitch * (file_or_rank index along each axis)
+point(file, rank) = origin + Rot(board_angle) · pitch·(file, rank indices)
 ```
 
 - `origin_x_mm`, `origin_z_mm` — center of **a1** in the pivot frame
-  (default 93.5, −94.5: near edge at r_min, board centered on the bisector).
-- `square_pitch_mm` — 216 mm board / 8 = **27**.
-- `r_min_mm` / `r_max_mm` — the reachable annulus (80 / 300 mm).
-- `file_axis` / `rank_axis` (`x`/`z`) + `invert_file` / `invert_rank` — orient the
-  logical board to however it physically sits in the sector.
+  (real config: 380, 0 — a1 is the **far** corner on the bisector; see DESIGN §4.1).
+- `square_pitch_mm` — ~210 mm board / 8 ≈ **26.3** (from the 297.5 mm diagonal).
+- `r_min_mm` / `r_max_mm` — the reachable annulus (80 / 455 mm; 455 = max radius,
+  not the 355 mm cart travel).
+- `board_angle_deg` — rotates the board about a1 (**135°** = the corner-first
+  diagonal); `file_axis` / `rank_axis` + `invert_file` / `invert_rank` cover the
+  remaining axis assignment / mirroring.
 - `travel_height_mm` — magnet raised (must clear pieces, stay below the pulley's
   `P_MAX_HEIGHT_MM`).
 - `pick_height_mm` — magnet lowered to contact a piece.
@@ -58,10 +62,10 @@ sends `MOVE R… A…`. Nothing above the transport knows the machine is a crane
 
 ### Graveyard
 
-Slots sit on **two symmetric arcs** at `graveyard_radius_mm` (default 293 mm, at
-angles that clear the board's ±108 mm z-extent so the arc always clears the board),
-spread between `graveyard_inner_deg` and `graveyard_outer_deg` on each side of
-the bisector. The default `graveyard_slots_per_side = 8` gives **16 slots**. A
+Slots sit on **two symmetric arcs** at `graveyard_radius_mm` (293 mm) at angles
+**beyond the board's ~±32° diagonal sweep** (37–52°) so they clear the board
+(**TODO: proper rework for the diagonal layout**), spread between
+`graveyard_inner_deg` and `graveyard_outer_deg` on each side of the bisector. The default `graveyard_slots_per_side = 8` gives **16 slots**. A
 full board reset needs 32 transient slots, so with 16 the machine asks for a
 manual reset. See [DESIGN.md §4.1](DESIGN.md).
 

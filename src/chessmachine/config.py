@@ -165,6 +165,11 @@ class GeometryConfig:
     rank_axis: str = "z"              # the other one
     invert_file: bool = False         # flip a..h direction
     invert_rank: bool = False         # flip 1..8 direction
+    board_angle_deg: float = 0.0      # rotate the whole board about a1 in the plane.
+                                      # 0 = axis-aligned (edge-first); 135 = the real
+                                      # machine's corner-first diagonal (h8 near the
+                                      # deadzone, a1 far). The real values live in
+                                      # config.example.yaml / config.yaml, not here.
     # Pulley (vertical) travel.
     travel_height_mm: float = 60.0    # cable retracted: clears the tallest piece
     pick_height_mm: float = 4.0       # cable lowered: magnet contacts a piece

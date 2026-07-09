@@ -80,26 +80,30 @@ motion:
   geometry:
     # Planar (x,z) mm with the ORIGIN AT THE CRANE PIVOT; the serial transport
     # converts to polar (r=hypot, theta=atan2) for the rotary + radial axes.
-    # See docs/DESIGN.md for the annular-sector geometry budget.
+    # The board sits CORNER-FIRST (diagonal): h8 in the near deadzone, a1 farthest,
+    # a8 on the right. See docs/DESIGN.md for the geometry budget.
     r_min_mm: 80.0          # inner reachable radius (crane body dead zone)
-    r_max_mm: 300.0         # arm / railcart maximum reach
-    board_size_mm: 216.0    # square 8x8 side (far square centers ~298 mm <= r_max)
-    square_pitch_mm: 27.0   # 216 mm board / 8
-    # Origin = center of a1 (near edge at r_min, board centered on the bisector).
-    origin_x_mm: 93.5
-    origin_z_mm: -94.5
-    file_axis: x            # files a..h run along this axis (x|z)
-    rank_axis: z            # ranks 1..8 run along this axis
-    invert_file: false
+    r_max_mm: 455.0         # crane's max RADIUS (origin -> end of reach). NOT the
+                            # 355 mm cart-travel span. a1 (~380 mm) sits well inside.
+    board_size_mm: 210.4    # square 8x8 side (= 297.5 mm diagonal / sqrt(2))
+    square_pitch_mm: 26.30  # 210.4 mm board / 8  (from the 297.5 mm diagonal)
+    board_angle_deg: 135.0  # corner-first diagonal: h8 near, a1 far, a8 on the right (-z)
+    # Origin = center of a1 (the FAR corner, on the bisector). h8 then lands ~120 mm
+    # out and a1 ~380 mm -- both comfortably inside the 455 mm reach.
+    origin_x_mm: 380.0
+    origin_z_mm: 0.0
+    file_axis: x            # files a..h run along this axis BEFORE the rotation
+    rank_axis: z            # ranks 1..8 run along this axis before the rotation
+    invert_file: false      # flip if the board comes out mirrored (a8/h1 swapped)
     invert_rank: false
     travel_height_mm: 60.0  # pulley raised: clears pieces AND decouples magnetically
     pick_height_mm: 4.0     # pulley lowered: magnet touches a piece
-    # Captured-piece storage: two symmetric arcs in the leftover sector, at angles
-    # that clear the board's +/-108 mm z-extent. 2 sides x 8 = 16 slots.
+    # Captured-piece storage: two symmetric arcs OUTSIDE the board's ~+/-32deg
+    # diagonal sweep. TODO: proper rework for the diagonal layout.
     graveyard_radius_mm: 293.0
     graveyard_slots_per_side: 8
-    graveyard_inner_deg: 26.0
-    graveyard_outer_deg: 49.0
+    graveyard_inner_deg: 37.0   # start beyond the board's ~32deg diagonal sweep
+    graveyard_outer_deg: 52.0   # stay inside the rotary soft limit (~55deg)
   speeds:
     travel_feed: 4000       # mm/min
     lift_feed: 1500
