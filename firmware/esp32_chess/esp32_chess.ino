@@ -102,17 +102,19 @@ const unsigned long R_HOME_SEAT_MS     = 120;    // extra inward push to seat ag
 const unsigned long R_HOME_SEEK_MAX_MS = 1100;   // hard cap (~920 ms for the full 320 mm + seat)
 const unsigned long JOG_MAX_MS         = 5000;   // safety cap for the manual JOG calibration command
 
-// ================ EDIT: winch (28BYJ-48 / ULN2003) ===========================
-// Cable moved per output revolution = circumference = 2*pi*drum radius, and the
-// 28BYJ-48 does ~4096 half-steps per output revolution (half-step drive), so
-// steps/mm = 4096 / (2*pi*radius).
-const float         WINCH_DRUM_RADIUS_MM = 7.0f;     // spool radius the cable winds on (0.7 cm drum)
-const float         WINCH_STEPS_PER_REV  = 4096.0f;  // 28BYJ-48 half-steps per output rev
-const float         P_STEPS_PER_MM   = WINCH_STEPS_PER_REV / (TWO_PI * WINCH_DRUM_RADIUS_MM);  // ~93
-const int           P_UP_STEP_DIR    = +1;    // step sign that RAISES the magnet
-const unsigned long WINCH_STEP_DELAY_MS = 2;  // per half-step (speed)
-const bool          P_HAS_TOP_ENDSTOP = false;  // no top switch wired — HOME won't seek
-const float         P_MAX_HEIGHT_MM   = 80.0f;// max lift / HOME parked height (small drum -> keep the lift modest)
+// ================ EDIT: winch (28BYJ-48 / ULN2003), TWO-POSITION =============
+// The winch has exactly two working positions a fixed step count apart:
+//   TRAVEL (up)   = where it starts and rests between every move
+//   PICK   (down) = magnet lowered onto a piece
+// Measured stroke = 7425 half-steps: -7425 lowers to PICK, +7425 climbs to TRAVEL.
+// It ALWAYS begins at TRAVEL and returns to TRAVEL after each move. (This replaces
+// the old mm x steps/mm math; the bigger spool made a direct measurement simpler.)
+const long          WINCH_STROKE_STEPS  = 8075;  // half-steps between TRAVEL and PICK
+const int           P_UP_STEP_DIR       = +1;    // step sign that RAISES the magnet (flip to invert)
+const unsigned long WINCH_STEP_DELAY_MS = 2;     // per half-step (speed)
+const float         WINCH_PICK_BELOW_MM = 30.0f; // a PULLEY height below this = drop to PICK
+const bool          P_HAS_TOP_ENDSTOP   = false; // no top switch wired — HOME won't seek
+const float         P_MAX_HEIGHT_MM     = 80.0f; // nominal TRAVEL/parked height (STATUS + HOME)
 const unsigned long WINCH_HOME_TIMEOUT_MS = 20000;
 // =============================================================================
 
@@ -162,6 +164,7 @@ DcAxis aAxis = {
 bool    g_estopped = false;
 bool    g_magnetOn = false;
 float   g_curH     = P_MAX_HEIGHT_MM;  // tracked winch height (mm); boot assumes the magnet is parked at the top
+bool    g_winchAtPick = false;         // two-position winch: false = TRAVEL (up, start), true = PICK (down)
 int     g_stepPhase = 0;     // current index into HALFSTEP
 char    g_line[96];          // line currently being assembled
 char    g_argline[96];       // clean copy of the last full line, for arg parsing
@@ -237,7 +240,7 @@ void dcStartMove(DcAxis& ax, float target) {
   }
   ax.target = target;
   if (fabs(delta) < MOVE_EPS) { dcStop(ax); return; }
-  Dir d = (delta > 0) ? FORWARD : REVERSE;
+  Dir d = (delta < 0) ? FORWARD : REVERSE;
   float rate = (d == FORWARD) ? ax.msPerFwd : ax.msPerRev;
   unsigned long dur = ax.deadzoneMs + (unsigned long)(fabs(delta) * rate + 0.5f);
   dcSetDir(ax, d);
@@ -308,7 +311,7 @@ void homeRail() {
   snprintf(buf, sizeof(buf), "# HOME rail: seek IN from R%.2f, %.2f mm -> %lu ms (seat %lu, cap %lu)",
            rAxis.cur, dist, t, R_HOME_SEAT_MS, R_HOME_SEEK_MAX_MS);
   Serial.println(buf);
-  dcSetDir(rAxis, REVERSE);
+  dcSetDir(rAxis, FORWARD);
   unsigned long end = millis() + t;
   while ((long)(millis() - end) < 0) { /* drive inward into the stop */ }
   dcStop(rAxis);
@@ -377,10 +380,16 @@ void doMoveRA(float rmm, float adeg) {
 }
 
 void doPulley(float hmm) {
-  hmm = clampf(hmm, 0.0f, P_MAX_HEIGHT_MM);
-  long steps = lroundf((hmm - g_curH) * P_STEPS_PER_MM) * P_UP_STEP_DIR;
-  winchStep(steps, WINCH_STEP_DELAY_MS);
-  g_curH = hmm;
+  // Two-position winch: a height below WINCH_PICK_BELOW_MM means "drop to PICK",
+  // anything above means "climb to TRAVEL". Move the fixed stroke only when the
+  // position actually changes; +stroke raises, -stroke lowers.
+  bool wantPick = (hmm < WINCH_PICK_BELOW_MM);
+  if (wantPick != g_winchAtPick) {
+    long steps = WINCH_STROKE_STEPS * P_UP_STEP_DIR * (wantPick ? -1 : +1);
+    winchStep(steps, WINCH_STEP_DELAY_MS);
+    g_winchAtPick = wantPick;
+  }
+  g_curH = hmm;   // track the requested height for STATUS
 }
 
 void doStatus() {
