@@ -68,11 +68,13 @@ class SerialMotion(MotionController):
             raise RuntimeError("SerialMotion not connected; call connect() first")
         self._ser.write((line + "\n").encode())
         self._ser.flush()
+        log.info("TX %s", line)
         deadline = time.time() + (timeout if timeout is not None else self.cfg.timeout_s)
         while True:
             resp = self._readline(deadline)
             if not resp:
                 continue
+            log.info("RX %s", resp)
             if resp[0] == "#" or resp.startswith("EVT"):
                 log.debug("esp32: %s", resp)
                 continue
