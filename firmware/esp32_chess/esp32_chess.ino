@@ -61,26 +61,44 @@ const unsigned long RELAY_SETTLE_MS  = 30;    // dead-time when reversing an H-b
 const bool          HAS_DC_ENDSTOPS  = false; // no radial/rotary switches wired yet
 
 // ================ EDIT: DC calibration (from bench measurements) =============
-// Linear cart, full 323 mm travel timed PER DIRECTION; the deadzone is ALREADY
-// included in these times, so we divide straight through and set deadzone = 0.
+// Each measured full-travel time INCLUDES a fixed startup dead-time (relay
+// settle + static friction) during which the motor hasn't begun moving yet. We
+// separate it out so the command time is  deadzone + distance*rate  and SHORT
+// moves aren't undershot. (Baking the deadzone into a linear ms/mm undershoots
+// every short move; that open-loop error accumulates until the tracked position
+// drifts past the physical cart and the axis drives INWARD into the stop — the
+// gear-grinding bug this fixes.)  These are tunable — measure the dead-time as
+// the delay between energizing and first visible motion.
+// Linear cart, full 320 mm travel (end to end) timed PER DIRECTION.
 // OUT 1150 ms = FORWARD (+r); IN 950 ms = REVERSE (-r) (it reels in faster).
-const float         R_MS_PER_MM_OUT = 1150.0f / 323.0f;  // ~3.56 ms/mm (FORWARD / +r / out)
-const float         R_MS_PER_MM_IN  =  950.0f / 323.0f;  // ~2.94 ms/mm (REVERSE / -r / toward)
-const unsigned long R_DEADZONE_MS   = 0;   // already folded into the times above
-// Rotary base: 360 deg turn = 8650 ms, same both ways (deadzone included).
-const float         A_MS_PER_DEG    = 8650.0f / 360.0f;  // ~24.0 ms/deg
-const unsigned long A_DEADZONE_MS   = 0;
+const unsigned long R_DEADZONE_MS   = 30;    // startup dead-time, both directions
+const float         R_MS_PER_MM_OUT = (1150.0f - R_DEADZONE_MS) / 320.0f;  // ~3.50 ms/mm (FORWARD / +r / out)
+const float         R_MS_PER_MM_IN  = ( 950.0f - R_DEADZONE_MS) / 320.0f;  // ~2.88 ms/mm (REVERSE / -r / toward)
+// Rotary base: 360 deg turn = 8650 ms, same both ways, ~50 ms startup dead-time.
+const unsigned long A_DEADZONE_MS   = 50;
+const float         A_MS_PER_DEG    = (8650.0f - A_DEADZONE_MS) / 360.0f;  // ~23.9 ms/deg
 
 // ================ EDIT: soft limits & homing =================================
-const float R_MIN_MM   = 80.0f;    // reachable annulus (rail is mechanically longer)
-const float R_MAX_MM   = 300.0f;
+// R is the CART's radial position from the pivot (serial_esp32 sends the cart
+// target, not the magnet's). At the inner stop the cart hasn't traveled at all,
+// but the winch/magnet mount sits ~mid-cart, so the cart reference is already
+// out past the bare crane structure: 80 mm structure + ~37.5 mm (winch ~half of
+// the 75 mm cart) = ~117.5 mm. THAT is r_min / home, NOT the 80 mm structure —
+// using 80 made every return over-reel ~37 mm into the inner stop.
+const float R_MIN_MM   = 117.5f;   // cart R at the inner mechanical stop (= home)
+const float R_MAX_MM   = 410.0f;   // a1 needs ~379 mm; cart travel is 320 mm so the far stop is 117.5+320=437.5 — stay under it
 const float A_MIN_DEG  = -55.0f;   // reachable sweep
 const float A_MAX_DEG  = 55.0f;
-const float R_HOME_MM  = 80.0f;    // radius of the PARK pose (cart fully in, = r_min)
+const float R_HOME_MM  = 117.5f;   // PARK pose = cart fully in against the inner stop (= r_min)
 const float A_HOME_DEG = 0.0f;     // pivot-frame angle of PARK pose (arm at board centre)
-const float R_HOME_BACKOFF_MM  = 3.0f;   // back off the switch after homing
-const float A_HOME_BACKOFF_DEG = 3.0f;
-const unsigned long HOME_SEEK_TIMEOUT_MS = 20000;  // give up seeking a dead switch
+const float R_HOME_BACKOFF_MM  = 3.0f;   // legacy (unused without endstops)
+const float A_HOME_BACKOFF_DEG = 3.0f;   // legacy (unused without endstops)
+// HOME re-homes PHYSICALLY (no endstops wired): the rail seeks its INNER hard
+// stop by driving inward for the time to cover the tracked distance from home
+// (current position x reverse speed) plus a short seating push, capped at a hard
+// max so a corrupt tracked value can never run the motor indefinitely.
+const unsigned long R_HOME_SEAT_MS     = 120;    // extra inward push to seat against the stop
+const unsigned long R_HOME_SEEK_MAX_MS = 1100;   // hard cap (~920 ms for the full 320 mm + seat)
 
 // ================ EDIT: winch (28BYJ-48 / ULN2003) ===========================
 // Cable moved per output revolution = circumference = 2*pi*drum radius, and the
@@ -141,7 +159,7 @@ DcAxis aAxis = {
 
 bool    g_estopped = false;
 bool    g_magnetOn = false;
-float   g_curH     = 0.0f;   // tracked winch height (mm)
+float   g_curH     = P_MAX_HEIGHT_MM;  // tracked winch height (mm); boot assumes the magnet is parked at the top
 int     g_stepPhase = 0;     // current index into HALFSTEP
 char    g_line[96];          // line currently being assembled
 char    g_argline[96];       // clean copy of the last full line, for arg parsing
@@ -206,8 +224,16 @@ void dcStop(DcAxis& ax) {
 // Arm a timed absolute move; the run itself is serviced by dcService().
 void dcStartMove(DcAxis& ax, float target) {
   target = clampf(target, ax.minLimit, ax.maxLimit);
-  ax.target = target;
   float delta = target - ax.cur;
+  // Safety: never drive INWARD once we're at the inner mechanical stop (the
+  // crane deadzone). No endstops are wired, so an open-loop reverse here just
+  // grinds the gears against the stop. Refuse it and keep the tracked position.
+  if (delta < 0.0f && ax.cur <= ax.minLimit + MOVE_EPS) {
+    ax.target = ax.cur;
+    dcStop(ax);
+    return;
+  }
+  ax.target = target;
   if (fabs(delta) < MOVE_EPS) { dcStop(ax); return; }
   Dir d = (delta > 0) ? FORWARD : REVERSE;
   float rate = (d == FORWARD) ? ax.msPerFwd : ax.msPerRev;
@@ -261,22 +287,44 @@ void winchStep(long steps, unsigned long delayMs) {
 }
 
 // ----------------------------- homing ----------------------------------------
-// NO ENDSTOPS on this build, so HOME does NOT move anything — blindly seeking a
-// switch that isn't there is exactly what drove the crane off on startup.
-// Instead, HOME declares the crane's CURRENT physical pose to be the reference.
-// PARK THE CRANE BY HAND at that pose FIRST, then send HOME:
-//   * arm pointing at the board centre   -> A_HOME_DEG (0 deg)
-//   * cart fully in against inner stop   -> R_HOME_MM (r_min)
-//   * magnet wound up to the top         -> P_MAX_HEIGHT_MM
-// When you add real endstops, set HAS_DC_ENDSTOPS / P_HAS_TOP_ENDSTOP and restore
-// a seeking homer (see git history) to automate this.
+// NO ENDSTOPS on this build, so HOME re-homes PHYSICALLY by timing instead of
+// reading a switch. It (1) raises the magnet clear, (2) swings the arm back to
+// the park bearing, and (3) drives the rail into its inner hard stop for a true
+// R zero. Steps 1-2 use the tracked position (open-loop); only the rail gets a
+// real mechanical reference. Add a rotary / winch endstop to zero those for real.
+//
+// Timed seek to the rail's inner stop: drive inward long enough to cover the
+// tracked distance from home (current position x reverse speed) plus a seating
+// push, capped so a bad tracked value can't run the motor forever. The cart then
+// rests against the stop (relays de-energized), so R is genuinely re-zeroed.
+void homeRail() {
+  float dist = rAxis.cur - R_HOME_MM;
+  if (dist < 0.0f) dist = 0.0f;
+  unsigned long t = (unsigned long)(dist * R_MS_PER_MM_IN + 0.5f) + R_HOME_SEAT_MS;
+  if (t > R_HOME_SEEK_MAX_MS) t = R_HOME_SEEK_MAX_MS;
+  dcSetDir(rAxis, REVERSE);
+  unsigned long end = millis() + t;
+  while ((long)(millis() - end) < 0) { /* drive inward into the stop */ }
+  dcStop(rAxis);
+  rAxis.cur = R_HOME_MM;
+}
+
 void doHome() {
   g_estopped = false;
   dcStop(rAxis);
   dcStop(aAxis);
-  rAxis.cur = R_HOME_MM;
+  // 1) Raise the magnet to the top so the sweep clears the board. The winch is a
+  //    stepper (holds its count), so this is an accurate absolute move.
+  doPulley(P_MAX_HEIGHT_MM);
+  // 2) Swing the arm back to the park bearing. A has no stop at its mid-range
+  //    home, so this is an open-loop reposition from the tracked angle — needed
+  //    so re-zeroing A's counter doesn't leave the NEXT move starting from a
+  //    phantom position (wire a rotary endstop to zero A's drift for real).
+  dcStartMove(aAxis, A_HOME_DEG);
+  while (aAxis.moving) dcService(aAxis);
   aAxis.cur = A_HOME_DEG;
-  g_curH    = P_MAX_HEIGHT_MM;
+  // 3) Rail: physically seek the inner mechanical stop for a true R zero.
+  homeRail();
 }
 
 // ----------------------------- motion ----------------------------------------

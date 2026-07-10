@@ -82,15 +82,15 @@ motion:
     # converts to polar (r=hypot, theta=atan2) for the rotary + radial axes.
     # The board sits CORNER-FIRST (diagonal): h8 in the near deadzone, a1 farthest,
     # a8 on the right. See docs/DESIGN.md for the geometry budget.
-    r_min_mm: 80.0          # inner reachable radius (crane body dead zone)
-    r_max_mm: 455.0         # crane's max RADIUS (origin -> end of reach). NOT the
-                            # 355 mm cart-travel span. a1 (~380 mm) sits well inside.
-    board_size_mm: 210.4    # square 8x8 side (= 297.5 mm diagonal / sqrt(2))
-    square_pitch_mm: 26.30  # 210.4 mm board / 8  (from the 297.5 mm diagonal)
-    board_angle_deg: 135.0  # corner-first diagonal: h8 near, a1 far, a8 on the right (-z)
-    # Origin = center of a1 (the FAR corner, on the bisector). h8 then lands ~120 mm
-    # out and a1 ~380 mm -- both comfortably inside the 455 mm reach.
-    origin_x_mm: 380.0
+    r_min_mm: 118.0         # nearest square (h8) magnet radius ~120 mm; cart floor is home 117.5
+    r_max_mm: 390.0         # farthest square (a1) magnet radius ~387 mm (cart max reach is 437.5)
+    board_size_mm: 216.0    # square 8x8 side = 8-tile playing span
+    square_pitch_mm: 27.0   # 216 mm board / 8
+    board_angle_deg: 135.0  # corner-first diagonal: the h8->a1 diagonal lies along the
+                            # arm centreline (theta 0); a8 on the right (-z).
+    # Origin = center of a1 (the FAR corner, on the bisector). With the 27 mm pitch
+    # h8 lands ~120 mm out and a1 ~387 mm; both inside the ~437 mm cart reach.
+    origin_x_mm: 387.3
     origin_z_mm: 0.0
     file_axis: x            # files a..h run along this axis BEFORE the rotation
     rank_axis: z            # ranks 1..8 run along this axis before the rotation

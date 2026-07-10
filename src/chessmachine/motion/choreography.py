@@ -54,6 +54,11 @@ class Choreographer:
         self.ctl.connect()
 
     def home(self) -> None:
+        # Drop anything held, then let the firmware do the physical re-home (it
+        # raises the magnet, swings the arm back to the park bearing, and drives
+        # the rail into its inner stop). Releasing first means a stray or
+        # mid-carry HOME never drags a piece across the board during the sweep.
+        self.ctl.magnet(False)
         self.ctl.home()
 
     def close(self) -> None:
