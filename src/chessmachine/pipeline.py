@@ -402,10 +402,13 @@ class ChessMachine:
                 finished_ok = False
                 self._say("I couldn't finish moving that piece — please check the "
                           "board matches the position before we continue.")
-        # A capture adds an extra pick-and-place (the discard to storage), so it's
-        # the biggest source of open-loop drift — re-home afterwards to re-zero.
-        # Skip it if actuation didn't finish, so we don't drag a stuck piece.
-        if finished_ok and self.cfg.app.rehome_on_capture and board_before.is_capture(move):
+        # Re-home to re-zero open-loop drift. By default this runs after EVERY
+        # finished move; rehome_on_capture is the narrower fallback (captures add
+        # an extra pick-and-place, the biggest drift source). Skip it if actuation
+        # didn't finish, so we don't drag a stuck piece.
+        if finished_ok and (self.cfg.app.rehome_after_move
+                            or (self.cfg.app.rehome_on_capture
+                                and board_before.is_capture(move))):
             self._rehome()              # silent unless it fails
         return text
 

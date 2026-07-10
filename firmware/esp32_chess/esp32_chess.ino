@@ -58,6 +58,7 @@
 const bool          RELAY_ACTIVE_LOW = true;  // most hobby relay boards: LOW = energized
 const bool          MAGNET_ACTIVE_LOW = false;// magnet relay/MOSFET: false = HIGH energizes
 const unsigned long RELAY_SETTLE_MS  = 30;    // dead-time when reversing an H-bridge
+const unsigned long AXIS_STAGGER_MS  = 60;    // gap between axes: only ONE DC motor runs at a time (avoids dual inrush -> brownout)
 const bool          HAS_DC_ENDSTOPS  = false; // no radial/rotary switches wired yet
 
 // ================ EDIT: DC calibration (from bench measurements) =============
@@ -99,6 +100,7 @@ const float A_HOME_BACKOFF_DEG = 3.0f;   // legacy (unused without endstops)
 // max so a corrupt tracked value can never run the motor indefinitely.
 const unsigned long R_HOME_SEAT_MS     = 120;    // extra inward push to seat against the stop
 const unsigned long R_HOME_SEEK_MAX_MS = 1100;   // hard cap (~920 ms for the full 320 mm + seat)
+const unsigned long JOG_MAX_MS         = 5000;   // safety cap for the manual JOG calibration command
 
 // ================ EDIT: winch (28BYJ-48 / ULN2003) ===========================
 // Cable moved per output revolution = circumference = 2*pi*drum radius, and the
@@ -302,6 +304,10 @@ void homeRail() {
   if (dist < 0.0f) dist = 0.0f;
   unsigned long t = (unsigned long)(dist * R_MS_PER_MM_IN + 0.5f) + R_HOME_SEAT_MS;
   if (t > R_HOME_SEEK_MAX_MS) t = R_HOME_SEEK_MAX_MS;
+  char buf[96];
+  snprintf(buf, sizeof(buf), "# HOME rail: seek IN from R%.2f, %.2f mm -> %lu ms (seat %lu, cap %lu)",
+           rAxis.cur, dist, t, R_HOME_SEAT_MS, R_HOME_SEEK_MAX_MS);
+  Serial.println(buf);
   dcSetDir(rAxis, REVERSE);
   unsigned long end = millis() + t;
   while ((long)(millis() - end) < 0) { /* drive inward into the stop */ }
@@ -309,10 +315,38 @@ void homeRail() {
   rAxis.cur = R_HOME_MM;
 }
 
+// Calibration jog: drive one DC axis for a FIXED time (signed ms: + = FWD/out,
+// - = REV/in), bypassing positioning + soft limits. Does NOT update the tracked
+// position, so send HOME afterwards. Use it to measure real loaded speed: jog a
+// known time, measure the travel, then ms/mm = time / distance.
+void jogAxis(DcAxis& ax, long ms) {
+  Dir d = (ms >= 0) ? FORWARD : REVERSE;
+  unsigned long t = (unsigned long)labs(ms);
+  if (t > JOG_MAX_MS) t = JOG_MAX_MS;
+  char buf[96];
+  snprintf(buf, sizeof(buf), "# JOG %s %s %lu ms (tracked position now UNKNOWN -> send HOME after)",
+           ax.name, (d == FORWARD) ? "FWD/out" : "REV/in", t);
+  Serial.println(buf);
+  dcSetDir(ax, d);
+  unsigned long end = millis() + t;
+  while ((long)(millis() - end) < 0) { /* run for the fixed jog time */ }
+  dcStop(ax);
+}
+
+// Drive one DC axis to an absolute target, blocking until it stops. Only this
+// axis is serviced, so no other motor is energized while it runs.
+void driveAxisBlocking(DcAxis& ax, float target) {
+  dcStartMove(ax, target);
+  while (ax.moving) dcService(ax);
+}
+
 void doHome() {
   g_estopped = false;
   dcStop(rAxis);
   dcStop(aAxis);
+  char buf[96];
+  snprintf(buf, sizeof(buf), "# HOME start: from R%.2f A%.2f H%.2f", rAxis.cur, aAxis.cur, g_curH);
+  Serial.println(buf);
   // 1) Raise the magnet to the top so the sweep clears the board. The winch is a
   //    stepper (holds its count), so this is an accurate absolute move.
   doPulley(P_MAX_HEIGHT_MM);
@@ -320,23 +354,26 @@ void doHome() {
   //    home, so this is an open-loop reposition from the tracked angle — needed
   //    so re-zeroing A's counter doesn't leave the NEXT move starting from a
   //    phantom position (wire a rotary endstop to zero A's drift for real).
-  dcStartMove(aAxis, A_HOME_DEG);
-  while (aAxis.moving) dcService(aAxis);
+  driveAxisBlocking(aAxis, A_HOME_DEG);
   aAxis.cur = A_HOME_DEG;
+  delay(AXIS_STAGGER_MS);         // let the base motor settle before the rail runs
   // 3) Rail: physically seek the inner mechanical stop for a true R zero.
   homeRail();
+  snprintf(buf, sizeof(buf), "# HOME done: R%.2f A%.2f H%.2f (rail seated at inner stop)",
+           rAxis.cur, aAxis.cur, g_curH);
+  Serial.println(buf);
 }
 
 // ----------------------------- motion ----------------------------------------
-// Move both DC axes to absolute (rmm, adeg) concurrently, blocking until done.
-// `feed` is ignored: relays are bang-bang, so travel time is fixed.
+// Move both DC axes to absolute (rmm, adeg) ONE AT A TIME — never together — so
+// only a single motor ever draws current. Two simultaneous inrush spikes were
+// sagging the supply and browning out the board (relays then float -> runaway).
+// Rotate first (cart retracted = smaller swing), let the base current settle,
+// then extend the cart. Blocks until both finish; `feed` is ignored.
 void doMoveRA(float rmm, float adeg) {
-  dcStartMove(rAxis, rmm);
-  dcStartMove(aAxis, adeg);
-  while (rAxis.moving || aAxis.moving) {
-    dcService(rAxis);
-    dcService(aAxis);
-  }
+  driveAxisBlocking(aAxis, adeg);
+  delay(AXIS_STAGGER_MS);
+  driveAxisBlocking(rAxis, rmm);
 }
 
 void doPulley(float hmm) {
@@ -388,6 +425,13 @@ void handleLine(char* line) {
     argKeyed('A', &a);   // F is accepted but ignored (relays have no speed control)
     doMoveRA(r, a);
     replyOK();
+  } else if (!strcmp(cmd, "JOG")) {
+    // Bench calibration/diagnosis: drive an axis for a FIXED time (signed ms).
+    // e.g. "JOG R2000" runs the cart out for 2 s. Position becomes unknown -> HOME.
+    float v;
+    if (argKeyed('R', &v)) jogAxis(rAxis, (long)v);
+    if (argKeyed('A', &v)) jogAxis(aAxis, (long)v);
+    replyOK();
   } else if (!strcmp(cmd, "PULLEY")) {
     float h = g_curH;
     argKeyed('H', &h);   // F ignored
@@ -404,6 +448,24 @@ void handleLine(char* line) {
 }
 
 // ------------------------------- setup/loop ----------------------------------
+// Why the ESP32 last reset. A BROWNOUT (or an unexpected POWERON mid-session)
+// means the motors are sagging the supply and rebooting the board — which cuts a
+// move short and floats the relay pins on the way back up.
+const char* resetReasonStr() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   return "POWERON";
+    case ESP_RST_EXT:       return "EXT";
+    case ESP_RST_SW:        return "SW";
+    case ESP_RST_PANIC:     return "PANIC/crash";
+    case ESP_RST_INT_WDT:   return "INT_WDT";
+    case ESP_RST_TASK_WDT:  return "TASK_WDT";
+    case ESP_RST_WDT:       return "WDT";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+    default:                return "UNKNOWN";
+  }
+}
+
 void setupDcAxis(DcAxis& ax) {
   // Drive relays de-energized BEFORE enabling outputs, so nothing clicks on.
   relayWrite(ax.pinFwd, false);
@@ -433,7 +495,9 @@ void setup() {
   stepperRelease();
   if (P_HAS_TOP_ENDSTOP) pinMode(P_TOP_ENDSTOP, INPUT_PULLUP);
 
-  Serial.println("# esp32_chess ready");
+  char buf[64];
+  snprintf(buf, sizeof(buf), "# esp32_chess ready (reset: %s)", resetReasonStr());
+  Serial.println(buf);
 }
 
 void loop() {

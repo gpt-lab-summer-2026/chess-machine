@@ -217,7 +217,8 @@ class AppConfig:
     require_legal_confirmation: bool = True  # re-ask on illegal/ambiguous moves
     concurrent_actuation: bool = True  # speak the move/explanation while the crane moves
     match_clock: bool = True          # track the human's thinking time (their clock only)
-    rehome_on_capture: bool = True    # re-home after a capture to zero open-loop drift
+    rehome_after_move: bool = True    # re-home after EVERY finished move to zero open-loop drift
+    rehome_on_capture: bool = True    # re-home after a capture (subsumed by rehome_after_move when on)
     log_level: str = "INFO"
 
 

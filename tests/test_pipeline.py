@@ -354,8 +354,16 @@ def test_capture_triggers_rehome():
     assert ("home",) in m.choreo.ctl.ops          # re-homed after the capture
 
 
-def test_non_capture_move_does_not_rehome():
+def test_every_move_rehomes_by_default():
     m, _ = make(auto_reply=False)
+    m.choreo.ctl.ops.clear()
+    m.handle("e4")                                # quiet move
+    assert ("home",) in m.choreo.ctl.ops          # re-homed after every move
+
+
+def test_non_capture_move_does_not_rehome_when_after_move_off():
+    m, _ = make(auto_reply=False)
+    m.cfg.app.rehome_after_move = False           # fall back to capture-only
     m.choreo.ctl.ops.clear()
     m.handle("e4")                                # quiet move
     assert ("home",) not in m.choreo.ctl.ops
@@ -363,6 +371,7 @@ def test_non_capture_move_does_not_rehome():
 
 def test_rehome_on_capture_can_be_disabled():
     m, _ = make(auto_reply=False)
+    m.cfg.app.rehome_after_move = False           # else every move would re-home
     m.cfg.app.rehome_on_capture = False
     m.handle("e4")
     m.handle("d5")

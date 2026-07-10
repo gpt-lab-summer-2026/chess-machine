@@ -9,7 +9,8 @@ app:
   concurrent_actuation: true # speak the move + explanation while the crane moves
                              # (a capture's discard always finishes first)
   match_clock: true         # track the human's thinking time only (ask "status"/"score")
-  rehome_on_capture: true   # re-home the crane after each capture to zero open-loop drift
+  rehome_after_move: true   # re-home the crane after EVERY finished move to zero open-loop drift
+  rehome_on_capture: true   # narrower fallback (captures only); subsumed when rehome_after_move is on
   log_level: INFO
 
 audio:
