@@ -9,10 +9,10 @@
  *   - One stepper motor via a ULN2003 driver (28BYJ-48-style), its own STEP cmd.
  *
  * ACTUATORS (edit the tables below to match your wiring):
- *   M1  base (single relay)   relay on pin 19            FWD = on, STOP = off
- *   M2  boom rail (horiz.)    relays on pins  4, 15      H-bridge FWD/REV
- *   M3  lift wire (vert.)     relays on pins 22, 23      H-bridge FWD/REV
- *   STEP  stepper (ULN2003)   IN1..IN4 = 5, 18, 21, 17   STEP <signed steps>
+ *   M1  magnet (single relay)  relay on pin 19            FWD = release magnet, STOP = off
+ *   M2  base rotation          relays on pins  4, 15      REV = clockwise, FWD = counter-cw
+ *   M3  railcart (radial)      relays on pins 22, 23      FWD = away from motor, REV = toward
+ *   STEP  lift wire (ULN2003)  IN1..IN4 = 5, 21, 18, 17   STEP <signed steps> (vertical)
  *
  *   NOTE ON PINS: GPIO3 is the USB-serial RX pin — using it as an output would
  *   kill command reception, so the 4th stepper coil is on GPIO17, not 3. GPIO5
@@ -73,9 +73,9 @@ struct Motor {
 
 // ======================= EDIT: DC motors & pins ==============================
 Motor motors[] = {
-  { "base relay",  19, -1, STOPPED, false, 0 },   // M1: single relay (on/off)
-  { "boom rail",    4, 15, STOPPED, false, 0 },   // M2: H-bridge (horizontal)
-  { "lift wire",   22, 23, STOPPED, false, 0 },   // M3: H-bridge (vertical)
+  { "magnet",         19, -1, STOPPED, false, 0 },   // M1: single relay — FWD releases the magnet
+  { "base rotation",   4, 15, STOPPED, false, 0 },   // M2: H-bridge — REV = clockwise, FWD = CCW
+  { "railcart",       22, 23, STOPPED, false, 0 },   // M3: H-bridge — FWD = away from motor, REV = toward
 };
 const int NUM_MOTORS = sizeof(motors) / sizeof(motors[0]);
 

@@ -35,56 +35,64 @@
 
 // ======================= EDIT: pins ==========================================
 // R axis = linear cart, 2-relay H-bridge (relay "3"). Swap FWD/REV to invert.
-#define R_FWD_PIN      26    // energize to drive the cart OUTWARD (r increasing)
-#define R_REV_PIN      16    // energize to drive the cart INWARD  (r decreasing)
+#define R_FWD_PIN      22    // FORWARD = +r = cart OUTWARD  (energize pin 22 to drive out)
+#define R_REV_PIN      23    // REVERSE = -r = cart TOWARD   (energize pin 23 to drive toward)
 // A axis = rotating base, 2-relay H-bridge (relay "2"). Swap FWD/REV to invert.
-#define A_FWD_PIN      25    // energize to rotate toward +degrees
-#define A_REV_PIN      27    // energize to rotate toward -degrees
-// Winch = 28BYJ-48 via ULN2003. Coils IN1..IN4. If it only VIBRATES, swap IN2<->IN3.
-#define P_IN1          33
-#define P_IN2          32
+#define A_FWD_PIN       4    // energize to rotate CCW / toward +degrees  [proto 2 f]
+#define A_REV_PIN      15    // energize to rotate CW  / toward -degrees  [proto 2 r]
+// Winch = 28BYJ-48 via ULN2003. Coils IN1..IN4 (proto order; IN2<->IN3 already
+// swapped so it rotates instead of vibrating). IN4 is 17, NOT 3 (that's UART RX).
+#define P_IN1           5
+#define P_IN2          21
 #define P_IN3          18
-#define P_IN4          19
-// Endstops: INPUT_PULLUP, switch to GND, LOW = pressed.
-#define R_ENDSTOP_PIN  13    // radial (inner end of the rail)
-#define A_ENDSTOP_PIN  14    // rotary home switch
-#define P_TOP_ENDSTOP  15    // winch fully-retracted (top) switch
-#define MAGNET_PIN     23    // relay "1" for the electromagnet
-// GPIO5 is free (was the old shared stepper-driver enable) — reserved for the
-// winch's own power-enable relay if/when that gets wired.
+#define P_IN4          17
+// Endstops: INPUT_PULLUP, switch to GND, LOW = pressed. NONE are wired on the
+// current build — these are placeholders. Pin 15 is now the A-axis reverse relay,
+// so the top endstop moved off 15 to avoid a conflict.
+#define R_ENDSTOP_PIN  13    // radial (inner end of the rail)      [not wired yet]
+#define A_ENDSTOP_PIN  14    // rotary home switch                  [not wired yet]
+#define P_TOP_ENDSTOP  26    // winch fully-retracted (top) switch  [not wired yet]
+#define MAGNET_PIN     19    // relay "1" for the electromagnet     [proto 1 / single relay]
 
 // ================ EDIT: relay polarity / dead-time ===========================
 const bool          RELAY_ACTIVE_LOW = true;  // most hobby relay boards: LOW = energized
 const bool          MAGNET_ACTIVE_LOW = false;// magnet relay/MOSFET: false = HIGH energizes
 const unsigned long RELAY_SETTLE_MS  = 30;    // dead-time when reversing an H-bridge
+const bool          HAS_DC_ENDSTOPS  = false; // no radial/rotary switches wired yet
 
 // ================ EDIT: DC calibration (from bench measurements) =============
-// Linear cart: 315 mm of travel in 1050 ms, of which 30 ms is start-up deadzone
-//   => 315 mm in 1020 ms of motion => 3.238 ms per mm.
-const float         R_MS_PER_MM   = 3.238f;
-const unsigned long R_DEADZONE_MS = 30;
-// Rotary base: 0.1887 rad/s = 10.81 deg/s => 92.5 ms per degree; ~50 ms deadtime.
-const float         A_MS_PER_DEG  = 92.5f;
-const unsigned long A_DEADZONE_MS = 50;
+// Linear cart, full 323 mm travel timed PER DIRECTION; the deadzone is ALREADY
+// included in these times, so we divide straight through and set deadzone = 0.
+// OUT 1150 ms = FORWARD (+r); IN 950 ms = REVERSE (-r) (it reels in faster).
+const float         R_MS_PER_MM_OUT = 1150.0f / 323.0f;  // ~3.56 ms/mm (FORWARD / +r / out)
+const float         R_MS_PER_MM_IN  =  950.0f / 323.0f;  // ~2.94 ms/mm (REVERSE / -r / toward)
+const unsigned long R_DEADZONE_MS   = 0;   // already folded into the times above
+// Rotary base: 360 deg turn = 8650 ms, same both ways (deadzone included).
+const float         A_MS_PER_DEG    = 8650.0f / 360.0f;  // ~24.0 ms/deg
+const unsigned long A_DEADZONE_MS   = 0;
 
 // ================ EDIT: soft limits & homing =================================
 const float R_MIN_MM   = 80.0f;    // reachable annulus (rail is mechanically longer)
 const float R_MAX_MM   = 300.0f;
 const float A_MIN_DEG  = -55.0f;   // reachable sweep
 const float A_MAX_DEG  = 55.0f;
-const float R_HOME_MM  = 80.0f;    // radius at the radial endstop (= r_min, inner)
-const float A_HOME_DEG = -60.0f;   // pivot-frame angle at the rotary endstop
+const float R_HOME_MM  = 80.0f;    // radius of the PARK pose (cart fully in, = r_min)
+const float A_HOME_DEG = 0.0f;     // pivot-frame angle of PARK pose (arm at board centre)
 const float R_HOME_BACKOFF_MM  = 3.0f;   // back off the switch after homing
 const float A_HOME_BACKOFF_DEG = 3.0f;
 const unsigned long HOME_SEEK_TIMEOUT_MS = 20000;  // give up seeking a dead switch
 
 // ================ EDIT: winch (28BYJ-48 / ULN2003) ===========================
-// PLACEHOLDER until the drum is calibrated: steps of the 28BYJ-48 per mm of wire.
-const float         P_STEPS_PER_MM   = 80.0f;
+// Cable moved per output revolution = circumference = 2*pi*drum radius, and the
+// 28BYJ-48 does ~4096 half-steps per output revolution (half-step drive), so
+// steps/mm = 4096 / (2*pi*radius).
+const float         WINCH_DRUM_RADIUS_MM = 7.0f;     // spool radius the cable winds on (0.7 cm drum)
+const float         WINCH_STEPS_PER_REV  = 4096.0f;  // 28BYJ-48 half-steps per output rev
+const float         P_STEPS_PER_MM   = WINCH_STEPS_PER_REV / (TWO_PI * WINCH_DRUM_RADIUS_MM);  // ~93
 const int           P_UP_STEP_DIR    = +1;    // step sign that RAISES the magnet
 const unsigned long WINCH_STEP_DELAY_MS = 2;  // per half-step (speed)
-const bool          P_HAS_TOP_ENDSTOP = true;
-const float         P_MAX_HEIGHT_MM   = 80.0f;// magnet height when the top switch trips
+const bool          P_HAS_TOP_ENDSTOP = false;  // no top switch wired — HOME won't seek
+const float         P_MAX_HEIGHT_MM   = 80.0f;// max lift / HOME parked height (small drum -> keep the lift modest)
 const unsigned long WINCH_HOME_TIMEOUT_MS = 20000;
 // =============================================================================
 
@@ -103,7 +111,8 @@ struct DcAxis {
   const char*   name;
   int           pinFwd;        // relay energizing the +coordinate direction
   int           pinRev;        // relay energizing the -coordinate direction
-  float         msPerUnit;     // travel time per mm (R) or per degree (A)
+  float         msPerFwd;      // travel time per unit in the + (FWD) direction
+  float         msPerRev;      // travel time per unit in the - (REV) direction
   unsigned long deadzoneMs;    // fixed lag before motion on every start
   float         minLimit;
   float         maxLimit;
@@ -120,12 +129,12 @@ struct DcAxis {
 };
 
 DcAxis rAxis = {
-  "radial(cart)", R_FWD_PIN, R_REV_PIN, R_MS_PER_MM, R_DEADZONE_MS,
+  "radial(cart)", R_FWD_PIN, R_REV_PIN, R_MS_PER_MM_OUT, R_MS_PER_MM_IN, R_DEADZONE_MS,
   R_MIN_MM, R_MAX_MM, R_ENDSTOP_PIN, REVERSE, R_HOME_MM, R_HOME_BACKOFF_MM,
   STOPPED, R_HOME_MM, false, R_HOME_MM, 0,
 };
 DcAxis aAxis = {
-  "rotary(base)", A_FWD_PIN, A_REV_PIN, A_MS_PER_DEG, A_DEADZONE_MS,
+  "rotary(base)", A_FWD_PIN, A_REV_PIN, A_MS_PER_DEG, A_MS_PER_DEG, A_DEADZONE_MS,
   A_MIN_DEG, A_MAX_DEG, A_ENDSTOP_PIN, REVERSE, A_HOME_DEG, A_HOME_BACKOFF_DEG,
   STOPPED, A_HOME_DEG, false, A_HOME_DEG, 0,
 };
@@ -201,7 +210,8 @@ void dcStartMove(DcAxis& ax, float target) {
   float delta = target - ax.cur;
   if (fabs(delta) < MOVE_EPS) { dcStop(ax); return; }
   Dir d = (delta > 0) ? FORWARD : REVERSE;
-  unsigned long dur = ax.deadzoneMs + (unsigned long)(fabs(delta) * ax.msPerUnit + 0.5f);
+  float rate = (d == FORWARD) ? ax.msPerFwd : ax.msPerRev;
+  unsigned long dur = ax.deadzoneMs + (unsigned long)(fabs(delta) * rate + 0.5f);
   dcSetDir(ax, d);
   ax.endTime = millis() + dur;
   ax.moving = true;
@@ -211,7 +221,7 @@ void dcStartMove(DcAxis& ax, float target) {
 // its endstop (overrun backstop — the host normally stays inside the soft limits).
 void dcService(DcAxis& ax) {
   if (!ax.moving) return;
-  if (ax.dir == ax.homeSeekDir && endstopPressed(ax.endstopPin)) {
+  if (HAS_DC_ENDSTOPS && ax.dir == ax.homeSeekDir && endstopPressed(ax.endstopPin)) {
     dcStop(ax);
     ax.cur = ax.homeValue;
     return;
@@ -220,15 +230,6 @@ void dcService(DcAxis& ax) {
     dcStop(ax);
     ax.cur = ax.target;
   }
-}
-
-// Blocking, un-clamped timed pulse (used for the homing back-off).
-void dcTimedPulse(DcAxis& ax, Dir d, float dist) {
-  unsigned long dur = ax.deadzoneMs + (unsigned long)(dist * ax.msPerUnit + 0.5f);
-  dcSetDir(ax, d);
-  unsigned long endT = millis() + dur;
-  while ((long)(millis() - endT) < 0) { /* spin */ }
-  dcSetDir(ax, STOPPED);
 }
 
 // ----------------------------- winch (stepper) -------------------------------
@@ -260,38 +261,22 @@ void winchStep(long steps, unsigned long delayMs) {
 }
 
 // ----------------------------- homing ----------------------------------------
-// Seek the endstop at full speed, stop on contact, call that point `homeValue`,
-// then back off the switch into the reachable range.
-void homeDcAxis(DcAxis& ax) {
-  dcSetDir(ax, ax.homeSeekDir);
-  unsigned long deadline = millis() + HOME_SEEK_TIMEOUT_MS;
-  while (!endstopPressed(ax.endstopPin) && (long)(millis() - deadline) < 0) { /* seek */ }
-  dcSetDir(ax, STOPPED);
-  ax.cur = ax.homeValue;
-  Dir backDir = (ax.homeSeekDir == REVERSE) ? FORWARD : REVERSE;
-  dcTimedPulse(ax, backDir, ax.homeBackoff);
-  ax.cur += (backDir == FORWARD ? +ax.homeBackoff : -ax.homeBackoff);
-  ax.moving = false;
-}
-
-void homeWinch() {
-  if (P_HAS_TOP_ENDSTOP) {
-    unsigned long deadline = millis() + WINCH_HOME_TIMEOUT_MS;
-    while (!endstopPressed(P_TOP_ENDSTOP) && (long)(millis() - deadline) < 0) {
-      g_stepPhase = (g_stepPhase + P_UP_STEP_DIR + 8) & 7;   // wind up to the switch
-      stepperWritePhase(g_stepPhase);
-      delay(WINCH_STEP_DELAY_MS);
-    }
-    // hold at the top (coils stay energized); released only on ESTOP / boot
-  }
-  g_curH = P_MAX_HEIGHT_MM;
-}
-
+// NO ENDSTOPS on this build, so HOME does NOT move anything — blindly seeking a
+// switch that isn't there is exactly what drove the crane off on startup.
+// Instead, HOME declares the crane's CURRENT physical pose to be the reference.
+// PARK THE CRANE BY HAND at that pose FIRST, then send HOME:
+//   * arm pointing at the board centre   -> A_HOME_DEG (0 deg)
+//   * cart fully in against inner stop   -> R_HOME_MM (r_min)
+//   * magnet wound up to the top         -> P_MAX_HEIGHT_MM
+// When you add real endstops, set HAS_DC_ENDSTOPS / P_HAS_TOP_ENDSTOP and restore
+// a seeking homer (see git history) to automate this.
 void doHome() {
   g_estopped = false;
-  homeDcAxis(rAxis);
-  homeDcAxis(aAxis);
-  homeWinch();
+  dcStop(rAxis);
+  dcStop(aAxis);
+  rAxis.cur = R_HOME_MM;
+  aAxis.cur = A_HOME_DEG;
+  g_curH    = P_MAX_HEIGHT_MM;
 }
 
 // ----------------------------- motion ----------------------------------------

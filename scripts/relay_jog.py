@@ -34,7 +34,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 from chessmachine.config import Config, load_config  # noqa: E402
 from chessmachine.motion.relay_esp32 import RelayMotion  # noqa: E402
 
-MOTOR_NAMES = {1: "base rotation", 2: "boom rail (horizontal)", 3: "lift wire (vertical)"}
+MOTOR_NAMES = {1: "magnet (relay)", 2: "base rotation", 3: "railcart (radial)"}
 
 
 def _drive(ctl: RelayMotion, motor: int, forward: bool, ms: int) -> None:
