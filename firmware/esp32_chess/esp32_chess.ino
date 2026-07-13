@@ -37,22 +37,38 @@
 // R axis = linear cart, 2-relay H-bridge (relay "3"). Swap FWD/REV to invert.
 #define R_FWD_PIN      22    // FORWARD = +r = cart OUTWARD  (energize pin 22 to drive out)
 #define R_REV_PIN      23    // REVERSE = -r = cart TOWARD   (energize pin 23 to drive toward)
-// A axis = rotating base, 2-relay H-bridge (relay "2"). Swap FWD/REV to invert.
-#define A_FWD_PIN       4    // energize to rotate CCW / toward +degrees  [proto 2 f]
-#define A_REV_PIN      15    // energize to rotate CW  / toward -degrees  [proto 2 r]
+// A axis = rotating base — NOW A STEPPER (28BYJ-48 via ULN2003), coils IN1..IN4.
+// (Was a DC H-bridge on pins 4/15, now freed. The DC base under-rotated with
+//  backlash; a stepper turns by exact step count, so that error is gone.)
+#define A_IN1          27
+#define A_IN2          26
+#define A_IN3          25
+#define A_IN4          33
+
+#define echoPin 12
+#define trigPin 13 
 // Winch = 28BYJ-48 via ULN2003. Coils IN1..IN4 (proto order; IN2<->IN3 already
 // swapped so it rotates instead of vibrating). IN4 is 17, NOT 3 (that's UART RX).
 #define P_IN1           5
 #define P_IN2          21
-#define P_IN3          18
+#define P_IN3          18 
 #define P_IN4          17
-// Endstops: INPUT_PULLUP, switch to GND, LOW = pressed. NONE are wired on the
-// current build — these are placeholders. Pin 15 is now the A-axis reverse relay,
-// so the top endstop moved off 15 to avoid a conflict.
-#define R_ENDSTOP_PIN  13    // radial (inner end of the rail)      [not wired yet]
-#define A_ENDSTOP_PIN  14    // rotary home switch                  [not wired yet]
-#define P_TOP_ENDSTOP  26    // winch fully-retracted (top) switch  [not wired yet]
+// Endstops: NONE wired. Pins 26 & 33 are now the base stepper (A_IN2/A_IN4), so
+// the old top/rotary endstop defines are gone; only R keeps a placeholder pin.
 #define MAGNET_PIN     19    // relay "1" for the electromagnet     [proto 1 / single relay]
+#define R_ENDSTOP_PIN  32    // radial inner switch  [not wired]
+
+
+#define SOUND_SPEED 0.034
+
+// ================ EDIT: ultrasoun
+// Down-looking sensor: ~39 cm to the bare table, CLOSER over a box placed at the
+// diagonal home. Sweep the boom until it sees the box, then call that A_HOME_DEG.
+const unsigned long US_TIMEOUT_US        = 20000;  // pulseIn cap (us) — never block the loop
+const float         US_HOME_THRESHOLD_CM = 10.0f;  // reading below this = box below = home
+const unsigned long US_PING_GAP_MS       = 20;     // settle between pings during the sweep
+const float         US_SEEK_DEG          = 45.0f;  // sweep this far each way to find the box
+const unsigned long US_PRINT_MS          = 500;    // stream the reading as a '#' line every N ms (0 = off)
 
 // ================ EDIT: relay polarity / dead-time ===========================
 const bool          RELAY_ACTIVE_LOW = true;  // most hobby relay boards: LOW = energized
@@ -73,11 +89,21 @@ const bool          HAS_DC_ENDSTOPS  = false; // no radial/rotary switches wired
 // Linear cart, full 320 mm travel (end to end) timed PER DIRECTION.
 // OUT 1150 ms = FORWARD (+r); IN 950 ms = REVERSE (-r) (it reels in faster).
 const unsigned long R_DEADZONE_MS   = 30;    // startup dead-time, both directions
-const float         R_MS_PER_MM_OUT = (1150.0f - R_DEADZONE_MS) / 320.0f;  // ~3.50 ms/mm (FORWARD / +r / out)
-const float         R_MS_PER_MM_IN  = ( 950.0f - R_DEADZONE_MS) / 320.0f;  // ~2.88 ms/mm (REVERSE / -r / toward)
-// Rotary base: 360 deg turn = 8650 ms, same both ways, ~50 ms startup dead-time.
-const unsigned long A_DEADZONE_MS   = 50;
-const float         A_MS_PER_DEG    = (8650.0f - A_DEADZONE_MS) / 360.0f;  // ~23.9 ms/deg
+// Loaded correction: on the real arm the cart UNDER-extends ~20-25% vs these
+// UNLOADED bench times (it moves slower under load). The corners test showed the
+// far corners reaching only ~0.79 of the commanded radius, so scale the rate up.
+// Tune this factor from the corners test, or re-measure loaded travel with JOG.
+const float         R_LOAD_FACTOR   = 1.25f;
+const float         R_MS_PER_MM_OUT = R_LOAD_FACTOR * (1150.0f - R_DEADZONE_MS) / 320.0f;  // ~4.37 ms/mm (FWD / +r / out)
+const float         R_MS_PER_MM_IN  = R_LOAD_FACTOR * ( 950.0f - R_DEADZONE_MS) / 320.0f;  // ~3.59 ms/mm (REV / -r / in)
+// Rotary base: STEPPER (28BYJ-48 via ULN2003) — exact step count, so no undershoot
+// or backlash (the reason we switched off the DC base). steps/deg = motor half-steps
+// per rev (4096) * gear ratio / 360. PLACEHOLDER assumes DIRECT drive (11.38); if the
+// base is geared down this is much higher -- CALIBRATE with `JOG A<steps>`: rotate a
+// known step count, measure the swept angle, steps/deg = steps / degrees.
+const float         A_STEPS_PER_DEG = 11.38f;  // CALIBRATE (x gear ratio if geared)
+const int           A_STEP_DIR      = +1;      // step sign for +degrees; flip to invert
+const unsigned long A_STEP_DELAY_MS = 2;       // per half-step (speed)
 
 // ================ EDIT: soft limits & homing =================================
 // R is the CART's radial position from the pivot (serial_esp32 sends the cart
@@ -109,14 +135,15 @@ const unsigned long JOG_MAX_MS         = 5000;   // safety cap for the manual JO
 // Measured stroke = 7425 half-steps: -7425 lowers to PICK, +7425 climbs to TRAVEL.
 // It ALWAYS begins at TRAVEL and returns to TRAVEL after each move. (This replaces
 // the old mm x steps/mm math; the bigger spool made a direct measurement simpler.)
-const long          WINCH_STROKE_STEPS  = 8075;  // half-steps between TRAVEL and PICK
+const long          WINCH_STROKE_STEPS  = 8050;  // half-steps between TRAVEL and PICK
 const int           P_UP_STEP_DIR       = +1;    // step sign that RAISES the magnet (flip to invert)
 const unsigned long WINCH_STEP_DELAY_MS = 2;     // per half-step (speed)
 const float         WINCH_PICK_BELOW_MM = 30.0f; // a PULLEY height below this = drop to PICK
 const bool          P_HAS_TOP_ENDSTOP   = false; // no top switch wired — HOME won't seek
 const float         P_MAX_HEIGHT_MM     = 80.0f; // nominal TRAVEL/parked height (STATUS + HOME)
 const unsigned long WINCH_HOME_TIMEOUT_MS = 20000;
-// =============================================================================
+// ==================================================
+//===========================
 
 const float MOVE_EPS = 0.05f;   // ignore sub-this deltas (no motor twitch)
 
@@ -148,6 +175,7 @@ struct DcAxis {
   bool          moving;
   float         target;
   unsigned long endTime;
+  float         Echo;
 };
 
 DcAxis rAxis = {
@@ -155,17 +183,15 @@ DcAxis rAxis = {
   R_MIN_MM, R_MAX_MM, R_ENDSTOP_PIN, REVERSE, R_HOME_MM, R_HOME_BACKOFF_MM,
   STOPPED, R_HOME_MM, false, R_HOME_MM, 0,
 };
-DcAxis aAxis = {
-  "rotary(base)", A_FWD_PIN, A_REV_PIN, A_MS_PER_DEG, A_MS_PER_DEG, A_DEADZONE_MS,
-  A_MIN_DEG, A_MAX_DEG, A_ENDSTOP_PIN, REVERSE, A_HOME_DEG, A_HOME_BACKOFF_DEG,
-  STOPPED, A_HOME_DEG, false, A_HOME_DEG, 0,
-};
+// The rotating base is no longer a DcAxis — it's a STEPPER, tracked by g_curA below.
 
 bool    g_estopped = false;
 bool    g_magnetOn = false;
 float   g_curH     = P_MAX_HEIGHT_MM;  // tracked winch height (mm); boot assumes the magnet is parked at the top
 bool    g_winchAtPick = false;         // two-position winch: false = TRAVEL (up, start), true = PICK (down)
-int     g_stepPhase = 0;     // current index into HALFSTEP
+int     g_stepPhase = 0;     // winch half-step phase index
+float   g_curA     = A_HOME_DEG;       // tracked base angle (deg); the base is a step-counted stepper
+int     g_aStepPhase = 0;              // base stepper half-step phase index
 char    g_line[96];          // line currently being assembled
 char    g_argline[96];       // clean copy of the last full line, for arg parsing
 uint8_t g_len = 0;
@@ -291,6 +317,36 @@ void winchStep(long steps, unsigned long delayMs) {
   // hanging load (no de-energize between moves). Released only on ESTOP / boot.
 }
 
+// ----------------------------- base (stepper) --------------------------------
+void baseWritePhase(int phase) {
+  digitalWrite(A_IN1, HALFSTEP[phase][0]);
+  digitalWrite(A_IN2, HALFSTEP[phase][1]);
+  digitalWrite(A_IN3, HALFSTEP[phase][2]);
+  digitalWrite(A_IN4, HALFSTEP[phase][3]);
+}
+void baseRelease() {   // de-energize all base coils (ESTOP / boot)
+  digitalWrite(A_IN1, LOW); digitalWrite(A_IN2, LOW);
+  digitalWrite(A_IN3, LOW); digitalWrite(A_IN4, LOW);
+}
+// Rotate the base `steps` half-steps (signed). Blocking; leaves coils energized so
+// the base holds its bearing against any load.
+void baseStep(long steps) {
+  int dir = (steps >= 0) ? 1 : -1;
+  long n = labs(steps);
+  for (long i = 0; i < n; i++) {
+    g_aStepPhase = (g_aStepPhase + dir + 8) & 7;
+    baseWritePhase(g_aStepPhase);
+    delay(A_STEP_DELAY_MS);
+  }
+}
+// Rotate the base to absolute angle `adeg` (clamped to the soft sweep). Exact.
+void baseMoveTo(float adeg) {
+  adeg = clampf(adeg, A_MIN_DEG, A_MAX_DEG);
+  long steps = lroundf((adeg - g_curA) * A_STEPS_PER_DEG) * A_STEP_DIR;
+  baseStep(steps);
+  g_curA = adeg;
+}
+
 // ----------------------------- homing ----------------------------------------
 // NO ENDSTOPS on this build, so HOME re-homes PHYSICALLY by timing instead of
 // reading a switch. It (1) raises the magnet clear, (2) swings the arm back to
@@ -343,27 +399,65 @@ void driveAxisBlocking(DcAxis& ax, float target) {
   while (ax.moving) dcService(ax);
 }
 
+// --- ultrasound rotary homing --------------------------------------------------
+// One reading from the down-looking ultrasound (HC-SR04). Bounded pulseIn so a
+// missing echo can never block the control loop; returns a large value on timeout.
+float readUltrasoundCm() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  unsigned long dur = pulseIn(echoPin, HIGH, US_TIMEOUT_US);
+  if (dur == 0) return 999.0f;             // no echo within the cap = treat as far/clear
+  return dur * SOUND_SPEED / 2.0f;
+}
+
+// Step the base up to `deg` in direction `dir` (+1/-1), pinging the ultrasound
+// every ~1 deg; stop and return true the instant the box appears below the sensor.
+bool seekBoxSweep(int dir, float deg) {
+  long total = lroundf(deg * A_STEPS_PER_DEG);
+  long chunk = lroundf(A_STEPS_PER_DEG);
+  if (chunk < 1) chunk = 1;                       // ~1 deg per ping
+  for (long done = 0; done < total; done += chunk) {
+    long n = (total - done < chunk) ? (total - done) : chunk;
+    baseStep(n * dir * A_STEP_DIR);
+    if (readUltrasoundCm() < US_HOME_THRESHOLD_CM) return true;
+    delay(US_PING_GAP_MS);
+  }
+  return false;
+}
+
+// Rotary home via ultrasound: sweep +/-US_SEEK_DEG until the down-looking sensor
+// sees the home box (closer than the bare table), then declare that bearing
+// A_HOME_DEG. Leaves A on its tracked estimate if the box is never found.
+bool homeRotaryUS() {
+  Serial.println("# HOME rotary: ultrasound box seek (stepper)");
+  bool found = (readUltrasoundCm() < US_HOME_THRESHOLD_CM);   // already over the box?
+  if (!found) found = seekBoxSweep(+1, US_SEEK_DEG) || seekBoxSweep(-1, 2.0f * US_SEEK_DEG);
+  if (found) { g_curA = A_HOME_DEG; Serial.println("# HOME rotary: box found -> A zeroed"); }
+  else       { Serial.println("# HOME rotary: box NOT found (kept tracked A)"); }
+  return found;
+}
+
 void doHome() {
   g_estopped = false;
   dcStop(rAxis);
-  dcStop(aAxis);
   char buf[96];
-  snprintf(buf, sizeof(buf), "# HOME start: from R%.2f A%.2f H%.2f", rAxis.cur, aAxis.cur, g_curH);
+  snprintf(buf, sizeof(buf), "# HOME start: from R%.2f A%.2f H%.2f", rAxis.cur, g_curA, g_curH);
   Serial.println(buf);
   // 1) Raise the magnet to the top so the sweep clears the board. The winch is a
   //    stepper (holds its count), so this is an accurate absolute move.
   doPulley(P_MAX_HEIGHT_MM);
-  // 2) Swing the arm back to the park bearing. A has no stop at its mid-range
-  //    home, so this is an open-loop reposition from the tracked angle — needed
-  //    so re-zeroing A's counter doesn't leave the NEXT move starting from a
-  //    phantom position (wire a rotary endstop to zero A's drift for real).
-  driveAxisBlocking(aAxis, A_HOME_DEG);
-  aAxis.cur = A_HOME_DEG;
+  // 2) Rotary: find the home box with the down-looking ultrasound (a real bearing
+  //    reference now, not open-loop). Sweeps +/-US_SEEK_DEG; on the box it zeroes A
+  //    to home, else it keeps the tracked angle.
+  homeRotaryUS();
   delay(AXIS_STAGGER_MS);         // let the base motor settle before the rail runs
   // 3) Rail: physically seek the inner mechanical stop for a true R zero.
   homeRail();
   snprintf(buf, sizeof(buf), "# HOME done: R%.2f A%.2f H%.2f (rail seated at inner stop)",
-           rAxis.cur, aAxis.cur, g_curH);
+           rAxis.cur, g_curA, g_curH);
   Serial.println(buf);
 }
 
@@ -374,9 +468,9 @@ void doHome() {
 // Rotate first (cart retracted = smaller swing), let the base current settle,
 // then extend the cart. Blocks until both finish; `feed` is ignored.
 void doMoveRA(float rmm, float adeg) {
-  driveAxisBlocking(aAxis, adeg);
+  baseMoveTo(adeg);               // rotating base: STEPPER, exact angle
   delay(AXIS_STAGGER_MS);
-  driveAxisBlocking(rAxis, rmm);
+  driveAxisBlocking(rAxis, rmm);  // radial cart: DC, timed
 }
 
 void doPulley(float hmm) {
@@ -395,16 +489,15 @@ void doPulley(float hmm) {
 void doStatus() {
   char buf[80];
   snprintf(buf, sizeof(buf), "R%.2f A%.2f H%.2f MAG%d ENDR%d ENDA%d",
-           rAxis.cur, aAxis.cur, g_curH, g_magnetOn ? 1 : 0,
-           endstopPressed(R_ENDSTOP_PIN) ? 1 : 0,
-           endstopPressed(A_ENDSTOP_PIN) ? 1 : 0);
+           rAxis.cur, g_curA, g_curH, g_magnetOn ? 1 : 0,
+           endstopPressed(R_ENDSTOP_PIN) ? 1 : 0, 0);   // no A endstop (base is a stepper)
   replyOK(buf);
 }
 
 void doEstop() {
   g_estopped = true;
   dcStop(rAxis);
-  dcStop(aAxis);
+  baseRelease();
   stepperRelease();
   magnetWrite(false);
   g_magnetOn = false;
@@ -423,23 +516,28 @@ void handleLine(char* line) {
     replyOK("HOMED");
   } else if (!strcmp(cmd, "STATUS")) {
     doStatus();
+  } else if (!strcmp(cmd, "USDIST")) {
+    char b[32];
+    snprintf(b, sizeof(b), "US %.1f", readUltrasoundCm());   // one-shot sensor test
+    replyOK(b);
   } else if (!strcmp(cmd, "ESTOP")) {
     doEstop();
   } else if (g_estopped) {
     replyErr("estopped; send HOME to clear");
   } else if (!strcmp(cmd, "MOVE")) {
     float r = rAxis.cur;
-    float a = aAxis.cur;
+    float a = g_curA;
     argKeyed('R', &r);
     argKeyed('A', &a);   // F is accepted but ignored (relays have no speed control)
     doMoveRA(r, a);
     replyOK();
   } else if (!strcmp(cmd, "JOG")) {
-    // Bench calibration/diagnosis: drive an axis for a FIXED time (signed ms).
-    // e.g. "JOG R2000" runs the cart out for 2 s. Position becomes unknown -> HOME.
+    // Bench calibration. R takes a FIXED TIME in ms (DC cart, "JOG R2000"); A takes
+    // a signed STEP COUNT (base stepper, "JOG A2048" — rotate, measure the angle,
+    // A_STEPS_PER_DEG = steps/deg). Both leave the tracked position UNKNOWN -> HOME.
     float v;
     if (argKeyed('R', &v)) jogAxis(rAxis, (long)v);
-    if (argKeyed('A', &v)) jogAxis(aAxis, (long)v);
+    if (argKeyed('A', &v)) baseStep((long)v * A_STEP_DIR);
     replyOK();
   } else if (!strcmp(cmd, "PULLEY")) {
     float h = g_curH;
@@ -496,13 +594,18 @@ void setup() {
   magnetWrite(false);
   g_magnetOn = false;
 
-  setupDcAxis(rAxis);
-  setupDcAxis(aAxis);
+  setupDcAxis(rAxis);              // radial cart is still a DC H-bridge
 
-  pinMode(P_IN1, OUTPUT); pinMode(P_IN2, OUTPUT);
+  pinMode(P_IN1, OUTPUT); pinMode(P_IN2, OUTPUT);   // winch stepper
   pinMode(P_IN3, OUTPUT); pinMode(P_IN4, OUTPUT);
-  stepperRelease();
-  if (P_HAS_TOP_ENDSTOP) pinMode(P_TOP_ENDSTOP, INPUT_PULLUP);
+  pinMode(A_IN1, OUTPUT); pinMode(A_IN2, OUTPUT);   // base stepper
+  pinMode(A_IN3, OUTPUT); pinMode(A_IN4, OUTPUT);
+
+  pinMode(trigPin, OUTPUT); // Sets the trigPin as an Output
+  pinMode(echoPin, INPUT); // Sets the echoPin as an Input
+
+  stepperRelease();   // winch coils off
+  baseRelease();      // base coils off
 
   char buf[64];
   snprintf(buf, sizeof(buf), "# esp32_chess ready (reset: %s)", resetReasonStr());
@@ -510,6 +613,19 @@ void setup() {
 }
 
 void loop() {
+  // Optional ultrasound telemetry: a rate-limited, BOUNDED read emitted as a '#'
+  // debug line (the host ignores '#'), so it can't jam the loop or corrupt the
+  // protocol the way the old per-iteration unbounded pulseIn did. It only runs
+  // between commands (a blocking MOVE/HOME pauses it). Set US_PRINT_MS = 0 to mute.
+  static unsigned long lastUs = 0;
+  if (US_PRINT_MS && (long)(millis() - lastUs) >= (long)US_PRINT_MS) {
+    lastUs = millis();
+    char b[40];
+    snprintf(b, sizeof(b), "# DIST %.1f cm", readUltrasoundCm());
+    Serial.println(b);
+  }
+
+  // Serial command handling.
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
