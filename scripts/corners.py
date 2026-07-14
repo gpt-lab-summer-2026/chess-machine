@@ -30,15 +30,44 @@ from chessmachine import factory  # noqa: E402
 from chessmachine.motion.geometry import BoardGeometry  # noqa: E402
 
 CORNERS = ["a1", "h8", "a8", "h1"]   # order requested for calibration
+# Base-stepper spin test: rotate +90 one way, then 180 the other, then back to 0.
+SPIN_SEQUENCE = [(+90, "+90 to one side"),
+                 (-180, "180 to the other side (now -90)"),
+                 (+90, "return to 0")]
+
+
+def _pause(auto: float | None, prompt: str) -> None:
+    if auto is not None:
+        time.sleep(auto)
+    else:
+        input(prompt)
+
+
+def _run_spin(ctl, steps_per_deg: float, auto: float | None) -> None:
+    """Spin the base stepper through SPIN_SEQUENCE via the raw JOG (bypasses the
+    soft-angle clamp so we can exceed +/-55 deg)."""
+    if not hasattr(ctl, "jog_base"):
+        print("--spin needs the serial backend (SerialMotion); this backend has no jog_base.")
+        return
+    for deg, label in SPIN_SEQUENCE:
+        steps = int(round(deg * steps_per_deg))
+        print(f"\n== spin {label}: {deg:+d} deg = {steps:+d} steps ==", flush=True)
+        ctl.jog_base(steps)
+        _pause(auto, "   done — measure the angle, press Enter for the next spin...")
+    print("\nSpin test done. JOG doesn't track the angle — send HOME (or re-run) to re-zero.")
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Touch the four board corners for geometry calibration")
+    ap = argparse.ArgumentParser(description="Board-corner + base-spin calibration tool")
     ap.add_argument("--config", help="YAML config (geometry + serial port)")
     ap.add_argument("--mock", action="store_true", help="use the mock backend (prints targets, no hardware)")
     ap.add_argument("--no-home", action="store_true", help="skip homing first")
     ap.add_argument("--auto", type=float, metavar="S",
-                    help="dwell S seconds at each corner instead of waiting for Enter")
+                    help="dwell S seconds at each step instead of waiting for Enter")
+    ap.add_argument("--spin", action="store_true",
+                    help="base-stepper spin test (+90, -180, back to 0) instead of the corners")
+    ap.add_argument("--a-steps-per-deg", type=float, default=25.38,
+                    help="base steps/deg for --spin (match firmware A_STEPS_PER_DEG)")
     args = ap.parse_args()
 
     cfg = load_config(args.config) if args.config else Config()
@@ -51,6 +80,15 @@ def main() -> int:
 
     print(f"Connecting ({cfg.motion.backend}) ...", flush=True)
     ctl.connect()
+    if args.spin:
+        try:
+            if not args.no_home:
+                print("Homing (re-zero the base) ...", flush=True)
+                ctl.home()
+            _run_spin(ctl, args.a_steps_per_deg, args.auto)
+        finally:
+            ctl.close()
+        return 0
 
     try:
         for sq in CORNERS:

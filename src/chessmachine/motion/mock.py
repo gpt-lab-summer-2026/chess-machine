@@ -63,6 +63,10 @@ class MockMotion(MotionController):
         self.ops.append(("estop",))
         log.debug("mock: estop")
 
+    def jog_base(self, steps: int) -> None:
+        self.ops.append(("jog_base", int(steps)))
+        log.debug("mock: jog_base %d steps", int(steps))
+
     # -- test helpers -------------------------------------------------------- #
     def moves(self) -> list[tuple]:
         """Just the (x,z) head moves, for concise assertions."""

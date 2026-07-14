@@ -130,6 +130,13 @@ class SerialMotion(MotionController):
     def estop(self) -> None:
         self._command("ESTOP", expect="ESTOP")
 
+    def jog_base(self, steps: int) -> None:
+        """Raw base-stepper jog: `JOG A<steps>` (signed half-steps). Bypasses the
+        soft-angle clamp and does NOT update the tracked angle, so send HOME
+        afterwards. Blocks until the move finishes."""
+        steps = int(steps)
+        self._command(f"JOG A{steps}", timeout=abs(steps) * 0.006 + 3.0)
+
     def status(self) -> dict:
         payload = self._command("STATUS")
         return self._parse_status(payload)
