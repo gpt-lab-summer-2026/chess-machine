@@ -157,36 +157,48 @@ pulse.
 
 Both positioning axes only **position a light head** (the cart carries the winch,
 pulley, and electromagnet + at most one piece). They never push pieces or bear a
-holding load. The real build drives them with **geared brushed DC motors**, each
-through a **2-relay SPDT H-bridge**, positioned **open-loop by time** (no encoders)
-— cheap and simple for a light head. The winch is the exception: a stepper, so it
-can hold a precise height.
+holding load. The build is now a **mixed drivetrain**: the radial cart is a geared
+brushed DC motor (cheap, simple, open-loop by time); the rotary base and the winch
+are both **28BYJ-48 steppers via ULN2003 drivers** — step-counted, so neither
+accumulates the timing drift a relay-timed DC axis does.
 
-- **Rotary base (θ → protocol `A`).** Geared DC motor via an H-bridge. The firmware
-  times each move from a measured slew rate — **0.1887 rad/s (~92.5 ms/deg)** with a
-  ~50 ms start deadtime — so `A_MS_PER_DEG` replaces the old `A_STEPS_PER_DEG`. A
-  rotary endstop defines the home angle (`A_HOME_DEG`); soft limits bound the ~107°
-  sweep.
-- **Radial railcart (r → protocol `R`).** Geared DC motor via an H-bridge, dragging a
-  low-friction cart along the arm (the cart also carries the winch stepper). Timed
-  from the measured traverse — **315 mm in 1020 ms of motion (~3.24 ms/mm)** plus a
-  30 ms deadzone — so `R_MS_PER_MM` replaces `R_STEPS_PER_MM`. A microswitch at the
-  inner end defines `R_HOME_MM ≈ r_min`.
+- **Rotary base (θ → protocol `A`).** **28BYJ-48 stepper via a ULN2003**, moved by
+  exact step count (`A_STEPS_PER_DEG`) rather than a timed slew rate — this
+  replaced an earlier DC + H-bridge base, which under-rotated under load/backlash.
+  No rotary endstop is wired; `HOME` instead sweeps a **down-looking ultrasound
+  sensor** left/right until it sees a box placed at the home bearing, and zeros
+  `A` there. Soft limits (`A_MIN_DEG`/`A_MAX_DEG`) bound the sweep — note the
+  ultrasound seek itself does not clamp to them, so the home box must be in place
+  before homing.
+- **Radial railcart (r → protocol `R`).** Still a **geared DC motor via a 2-relay
+  H-bridge**, dragging a low-friction cart along the arm (the cart also carries
+  the winch stepper). Timed from the measured traverse — **320 mm end to end**,
+  ~1150 ms out / ~950 ms in, plus a 30 ms start deadzone — with a load-correction
+  factor applied on top (bench-unloaded timing under-extends the real, loaded
+  cart). No endstop is wired; `HOME` re-zeros `R` by driving inward for a capped
+  time, ramming the inner mechanical stop (safe for this DC mechanism, unlike the
+  steppers).
   - ⚠️ Relays are bang-bang (full speed / off): **no speed control**, so the
-    protocol's feed `F` is ignored on these axes — travel time is fixed by the motor.
-- **Winch (pulley `H`).** A **28BYJ-48 stepper via a ULN2003**, step-counted, with a
-  top endstop for homing. It **holds its height between moves** (coils energized) so
-  the hanging load can't back-drive it.
+    protocol's feed `F` is ignored on this axis — travel time is fixed by the motor.
+- **Winch (pulley `H`).** Same stepper type as the base (28BYJ-48 / ULN2003), but
+  simpler: it has exactly **two fixed positions** — TRAVEL (up, rest) and PICK
+  (down) — a measured step stroke apart, no top endstop, no continuous mm
+  positioning. It **holds its position between moves** (coils energized) so the
+  hanging load can't back-drive it.
 
 **Guide vs drive.** A linear rail/carriage on the arm is the *guide* (bears load,
-keeps motion straight and low-friction); the DC motor is the *drive*. Complementary.
+keeps motion straight and low-friction); the motor (DC or stepper) is the *drive*.
+Complementary.
 
-**Open-loop accuracy.** Timed DC positioning has no feedback, so error accumulates
-across a game (relay lag, coasting, wheel slip). Mitigations: **re-home between
-phases** to zero it out, keep the per-move rates/deadzones calibrated, and lean on
-the recessed square wells (§4.2) to capture the last few mm. If drift becomes a
-problem, the natural upgrade is wheel encoders (closed-loop) — but bench-tune the
-timing first.
+**Open-loop accuracy.** Neither drive type has feedback, so error can still
+accumulate: the DC radial axis from relay lag/coasting/wheel slip (mitigated by
+re-homing — ramming its stop is a real, if blunt, re-reference); the stepper axes
+from skipped steps if ever stalled or under-torqued (mitigated by *not* forcing
+them against a hard limit — the ultrasound seek and the winch's fixed stroke are
+the closed-enough references). Re-home between phases, keep the per-axis
+rates/step-counts calibrated, and lean on the recessed square wells (§4.2) to
+capture the last few mm. If drift becomes a problem, the natural upgrade is real
+endstops/encoders — but bench-tune the open-loop numbers first.
 
 **Why polar fits this build.** A crane gives a long reach (~30 cm arm) from a small
 footprint, and the two natural axes (rotate + extend) map directly to (θ, r). The
@@ -203,11 +215,17 @@ gentle so the hanging electromagnet doesn't swing (firmware deadzones/rates, hos
 - **Storage count** — 16 (two side arcs) vs 32 (wider sweep + a second pair of
   arcs) for auto-reset. See §4.1.
 - **Crane dimensions** — `r_min` (dead radius around the base) and `r_max` (arm
-  reach) are estimates (80 / 300 mm); measure the real crane and re-run
-  `scripts/calibrate.py`. Every board/graveyard coordinate follows from them.
-- **DC axis calibration** — measure each axis's rate and start deadtime (deg/s + ms
-  for rotary, mm/s + ms for the cart) and set `A_MS_PER_DEG` / `R_MS_PER_MM`; re-check
-  after any gearing or supply-voltage change.
+  reach) are measured on the real crane (~118 / ~390–410 mm depending on config);
+  re-run `scripts/calibrate.py` if the mechanism changes. Every board/graveyard
+  coordinate follows from them.
+- **Radial (DC) axis calibration** — measure the cart's rate and start deadzone
+  (mm/s + ms, per direction) and set `R_MS_PER_MM_OUT`/`R_MS_PER_MM_IN`; re-check
+  after any supply-voltage or load change (a `R_LOAD_FACTOR` already corrects for
+  loaded vs. bench-unloaded speed — re-derive it from a `JOG R<ms>` test rather
+  than assuming it still holds after a mechanical change).
+- **Rotary (stepper) axis calibration** — `A_STEPS_PER_DEG` is a placeholder
+  assuming direct drive; calibrate with `JOG A<steps>` (rotate a known step
+  count, measure the swept angle) and re-check if the base is geared.
 - **Magnet spec** — the 6 V electromagnet's pull curve at the real air gap;
   bench-test before finalizing pick/travel heights.
 - **Placement precision** — 27 mm cells are forgiving, but cable swing still

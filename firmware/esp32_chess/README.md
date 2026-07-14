@@ -1,63 +1,82 @@
 # esp32_chess firmware
 
 Motor controller for the chess machine. Receives high-level commands from the
-host over USB serial and drives the polar crane with the real hybrid drivetrain:
+host over USB serial and drives the polar crane with a mixed drivetrain:
 
 - **R axis** (radial, mm from the pivot) — the **linear cart** on the arm. Brushed
-  DC motor via a **2-relay H-bridge**, positioned by **time** (open-loop).
-- **A axis** (angle, degrees) — the **rotating base**. Brushed DC motor via a
-  **2-relay H-bridge**, positioned by **time**.
-- **Pulley H** (mm) — the **winch**. 28BYJ-48-style stepper via a **ULN2003** driver.
+  DC motor via a **2-relay H-bridge**, positioned by **time** (open-loop). No
+  endstop wired; `HOME` re-zeros it by timed ram into the inner mechanical stop
+  (safe for this mechanism).
+- **A axis** (angle, degrees) — the **rotating base**. **28BYJ-48 stepper via a
+  ULN2003** driver, positioned by **step count** (open-loop, but exact — no
+  timing drift or backlash the way a timed DC motor has). `HOME` finds the
+  reference angle by sweeping a down-looking ultrasound sensor until it sees a
+  box placed at the home bearing — **not** by ramming a stop (a stepper's
+  gearbox is not safe to stall against a hard limit the way the DC cart is).
+- **Pulley H** (mm) — the **winch**. Same stepper type as the base (28BYJ-48 /
+  ULN2003). Two fixed positions — TRAVEL (up, rest) and PICK (down) — a
+  measured step stroke apart; no top endstop.
 - **Magnet** — one relay, on/off.
 
-The wire protocol is unchanged from the old all-stepper build (see
-[../../docs/PROTOCOL.md](../../docs/PROTOCOL.md)); only the motor layer changed.
+The wire protocol is unchanged regardless of which motor type sits behind each
+axis (see [../../docs/PROTOCOL.md](../../docs/PROTOCOL.md)).
 
 ## Hardware
 
-| Function              | Default pin(s) | Notes                                             |
-|-----------------------|----------------|---------------------------------------------------|
-| Radial H-bridge FWD/REV (relay 3) | 26 / 16 | cart out / in along the arm (r, mm). Swap to invert. |
-| Rotary H-bridge FWD/REV (relay 2) | 25 / 27 | base + / − degrees. Swap to invert.               |
-| Winch ULN2003 IN1–IN4 | 33 / 32 / 18 / 19 | 28BYJ-48 half-step. Swap IN2↔IN3 if it only vibrates. |
-| Radial endstop        | 13             | `INPUT_PULLUP`, switch to GND, LOW = pressed (inner end) |
-| Rotary endstop        | 14             | rotary home switch                                |
-| Winch top endstop     | 15             | homes the magnet to its highest point             |
-| Electromagnet (relay 1) | 23           | relay / MOSFET; `MAGNET_ACTIVE_LOW` sets polarity |
-| *(free)*              | 5              | old shared enable; reserved for the winch's own power relay |
+| Function                    | Default pin(s)     | Notes                                                        |
+|------------------------------|--------------------|---------------------------------------------------------------|
+| Radial H-bridge FWD/REV (relay 3) | 22 / 23      | cart out / in along the arm (r, mm). Swap to invert.         |
+| Radial endstop               | 32                 | placeholder, **not wired** — `HOME` rams the inner stop instead |
+| Base stepper ULN2003 IN1–IN4 | 27 / 26 / 25 / 33  | 28BYJ-48 half-step. Swap IN2↔IN3 if it only vibrates.         |
+| Winch stepper ULN2003 IN1–IN4| 5 / 21 / 18 / 17   | 28BYJ-48 half-step. Same swap note as above.                  |
+| Ultrasound trig / echo       | 13 / 12            | down-looking HC-SR04-style sensor, used to home the base      |
+| Electromagnet (relay 1)      | 19                 | relay / MOSFET; `MAGNET_ACTIVE_LOW` sets polarity             |
 
-Each DC motor uses a **2-SPDT-relay H-bridge**: energize one relay for forward,
-the other for reverse, both released = coast (STOP). We pass through STOP with a
-30 ms dead-time on every reversal so the supply is never shorted. Power the motors
-and the ULN2003 from **their own supply**, common ground with the ESP32. Put a
-**flyback diode / snubber** across the magnet coil, and add **external ~10 kΩ
-pull-ups** on GPIO22/23 if your relay board is active-low (those pins float at
-boot and a motor/magnet could twitch before `setup()` runs).
+The radial H-bridge is **2 SPDT relays**: energize one for forward, the other
+for reverse, both released = coast (STOP). We pass through STOP with a 30 ms
+dead-time on every reversal so the supply is never shorted. Power the DC motor
+and both ULN2003 drivers from **their own supply**, common ground with the
+ESP32. Put a **flyback diode / snubber** across the magnet coil and the DC
+motor terminals, and add **external ~10 kΩ pull-ups** to the de-energized
+level on the relay control pins if your relay board is active-low (GPIOs float
+at boot / during a brownout reset, and a floating H-bridge input pair can spin
+the motor unattended — see the `resetReasonStr()` boot log below).
 
 ## Tuning (top of the sketch)
 
-- `R_MS_PER_MM` / `A_MS_PER_DEG` — the core calibration: how long the motor runs
-  per mm / per degree. Defaults derived from the bench numbers (315 mm in 1020 ms
-  of motion; 0.1887 rad/s). **Measure against a ruler / protractor and adjust.**
-- `R_DEADZONE_MS` / `A_DEADZONE_MS` — dead-time before each axis actually moves
-  (30 ms / 50 ms); added to every timed run.
-- Wrong direction? **Swap the FWD/REV pins** for that axis (no invert flag).
-- `R_HOME_MM` / `A_HOME_DEG` — the radius / angle at each endstop, so absolute
-  moves are correct straight after homing. `*_HOME_BACKOFF_*` backs off the switch.
-- `R_MIN_MM`/`R_MAX_MM`, `A_MIN_DEG`/`A_MAX_DEG` — soft limits of the reachable
-  annular sector; the host stays inside these but they backstop a bad command.
-  (The rail is mechanically ~315 mm; the board only uses the [80, 300] annulus —
-  the ms/mm rate is range-independent, so that's fine.)
-- `RELAY_ACTIVE_LOW` / `MAGNET_ACTIVE_LOW` — relay board polarity.
-- **Winch (placeholder):** `P_STEPS_PER_MM` must be calibrated to the drum;
-  `P_UP_STEP_DIR` sets which way raises the magnet; `P_MAX_HEIGHT_MM` is the
-  height when the top endstop trips; `WINCH_STEP_DELAY_MS` sets winch speed. The
-  winch **holds its height between moves** (coils stay energized — holding torque,
-  runs warm), releasing only on ESTOP / boot. The winch is a first pass — its
-  3.3 cm offset and the real piece heights come later.
+- `R_MS_PER_MM_OUT` / `R_MS_PER_MM_IN` — the radial cart's core calibration: ms
+  per mm in each direction, derived from bench numbers and an empirical
+  `R_LOAD_FACTOR` (the loaded cart is slower than the unloaded bench test).
+  **Re-measure with `JOG R<ms>` and adjust the factor.**
+- `R_DEADZONE_MS` — dead-time before the cart actually moves; added to every
+  timed run so short moves aren't undershot.
+- `A_STEPS_PER_DEG` — the base's steps-per-degree; a **placeholder** assuming
+  direct drive. **Calibrate with `JOG A<steps>`**: rotate a known step count,
+  measure the swept angle, `steps/deg = steps / degrees`.
+- Wrong direction? DC axis: swap the FWD/REV pins. Stepper axis: flip
+  `A_STEP_DIR` (or `P_UP_STEP_DIR` for the winch).
+- ⚠️ **The pin comment and the calibration-constant names (`_OUT`/`_IN`,
+  "FORWARD = +r") describe the ORIGINAL wiring assumption, but `dcStartMove`'s
+  direction logic no longer matches it** (`FORWARD` is chosen when the target
+  is *smaller* than the current position). If the two disagree, the code's
+  behavior wins at runtime — but this means the names are misleading. Verify
+  with `JOG R<ms>` which relay actually drives which way before trusting `HOME`
+  / soft limits, and fix the comments/names to match reality once confirmed.
+- `R_MIN_MM` / `R_MAX_MM`, `A_MIN_DEG` / `A_MAX_DEG` — soft limits of the
+  reachable annular sector; the host stays inside these but they backstop a bad
+  command.
+- `US_HOME_THRESHOLD_CM` / `US_SEEK_DEG` — the base's ultrasound homing: how
+  close a reading must be to count as "box below", and how far each way to
+  sweep looking for it. `seekBoxSweep`/`baseStep` do **not** clamp to
+  `A_MIN_DEG`/`A_MAX_DEG` — if the box is missing, the sweep can drive the base
+  past its soft limits. Make sure the home box is in place before calling `HOME`.
+- `WINCH_STROKE_STEPS` — the winch's measured TRAVEL↔PICK step count; the
+  winch has no continuous mm positioning anymore, just these two positions.
+- `MAGNET_ACTIVE_LOW` — relay/MOSFET polarity for the magnet (the only relay
+  left in the system).
 
-The DC axes are relays (bang-bang), so the host's feed `F` is **accepted and
-ignored** — travel time is fixed by each motor's speed.
+Neither the DC axis nor the steppers have real speed control, so the host's
+feed `F` is **accepted and ignored** on every axis.
 
 ## Build & flash
 

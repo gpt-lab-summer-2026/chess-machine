@@ -1,18 +1,25 @@
+#include <esp_system.h>   // esp_reset_reason() / ESP_RST_* (not reliably pulled in transitively)
+
 /*
  * esp32_chess — motor controller firmware for the voice-controlled chess board.
  *
- * Drives a polar crane, but with the REAL hybrid drivetrain (this is a first
- * sketch of the control system for the actual build):
+ * Drives a polar crane with a mixed drivetrain:
  *
  *   - R axis (radial, mm from the pivot) = the LINEAR CART on the arm.
  *     Brushed DC motor via a 2-relay H-bridge. Positioned by TIME (open-loop).
- *   - A axis (angle, degrees in the pivot frame) = the ROTATING BASE.
- *     Brushed DC motor via a 2-relay H-bridge. Positioned by TIME (open-loop).
- *   - Pulley H (mm) = the WINCH. 28BYJ-48-style stepper via a ULN2003 driver.
+ *     No endstop wired, but the mechanism tolerates being driven into its inner
+ *     hard stop (that's how HOME re-zeros it — see homeRail()).
+ *   - A axis (angle, degrees in the pivot frame) = the ROTATING BASE. STEPPER
+ *     (28BYJ-48 via ULN2003), step-counted (open-loop, but exact — no timing
+ *     drift or backlash the way the old timed-DC base had). Homed by sweeping a
+ *     down-looking ultrasound sensor until it sees a box at home, not by ramming
+ *     a stop (a stepper's gearbox is not safe to stall against a hard limit).
+ *   - Pulley H (mm) = the WINCH. Same stepper type as the base. Two fixed
+ *     positions (TRAVEL / PICK), a measured step stroke apart.
  *   - One electromagnet on a single relay.
  *
  * It speaks the SAME line protocol the host (chessmachine.motion.serial_esp32)
- * expects — only the motor layer changed from steppers to timed DC + a winch:
+ * expects — the motor layer can change freely underneath it:
  *
  *   PING                          -> OK PONG
  *   HOME                          -> OK HOMED
@@ -25,9 +32,10 @@
  * The host does the Cartesian->polar conversion, so this firmware only positions
  * the radial axis (mm) and the rotary axis (degrees). Every motion command BLOCKS
  * until the move finishes, then replies OK, so the host never has to track motor
- * state. The DC axes are relays (bang-bang), so the feed `F` is accepted and
- * IGNORED — travel time is fixed by each motor's own speed. Lines starting with
- * '#' are debug.
+ * state. Neither the DC axis nor the steppers have real speed control, so the
+ * feed `F` is accepted and IGNORED — travel time is fixed by each axis's own
+ * rate/step-rate. Only ONE motor is ever driven at a time (see AXIS_STAGGER_MS)
+ * to avoid a dual-inrush brownout. Lines starting with '#' are debug.
  *
  * Board: any ESP32 dev module. No external libraries. EDIT the pin + calibration
  * section for your wiring / measurements.
@@ -37,7 +45,7 @@
 // R axis = linear cart, 2-relay H-bridge (relay "3"). Swap FWD/REV to invert.
 #define R_FWD_PIN      22    // FORWARD = +r = cart OUTWARD  (energize pin 22 to drive out)
 #define R_REV_PIN      23    // REVERSE = -r = cart TOWARD   (energize pin 23 to drive toward)
-// A axis = rotating base — NOW A STEPPER (28BYJ-48 via ULN2003), coils IN1..IN4.
+// A axis = rotating base — STEPPER (28BYJ-48 via ULN2003), coils IN1..IN4.
 // (Was a DC H-bridge on pins 4/15, now freed. The DC base under-rotated with
 //  backlash; a stepper turns by exact step count, so that error is gone.)
 #define A_IN1          27
@@ -46,15 +54,17 @@
 #define A_IN4          33
 
 #define echoPin 12
-#define trigPin 13 
+#define trigPin 13
 // Winch = 28BYJ-48 via ULN2003. Coils IN1..IN4 (proto order; IN2<->IN3 already
 // swapped so it rotates instead of vibrating). IN4 is 17, NOT 3 (that's UART RX).
 #define P_IN1           5
 #define P_IN2          21
-#define P_IN3          18 
+#define P_IN3          18
 #define P_IN4          17
-// Endstops: NONE wired. Pins 26 & 33 are now the base stepper (A_IN2/A_IN4), so
-// the old top/rotary endstop defines are gone; only R keeps a placeholder pin.
+// Endstops: NONE wired on any axis. R keeps a placeholder pin — HOME currently
+// re-zeros it by timed ram into the inner hard stop (safe for this mechanism;
+// see homeRail()); wiring a real switch there would let it stop on contact
+// instead of a blind timed cap.
 #define MAGNET_PIN     19    // relay "1" for the electromagnet     [proto 1 / single relay]
 #define R_ENDSTOP_PIN  32    // radial inner switch  [not wired]
 
@@ -74,8 +84,8 @@ const unsigned long US_PRINT_MS          = 500;    // stream the reading as a '#
 const bool          RELAY_ACTIVE_LOW = true;  // most hobby relay boards: LOW = energized
 const bool          MAGNET_ACTIVE_LOW = false;// magnet relay/MOSFET: false = HIGH energizes
 const unsigned long RELAY_SETTLE_MS  = 30;    // dead-time when reversing an H-bridge
-const unsigned long AXIS_STAGGER_MS  = 60;    // gap between axes: only ONE DC motor runs at a time (avoids dual inrush -> brownout)
-const bool          HAS_DC_ENDSTOPS  = false; // no radial/rotary switches wired yet
+const unsigned long AXIS_STAGGER_MS  = 60;    // gap between axes: only ONE motor runs at a time (avoids dual inrush -> brownout)
+const bool          HAS_DC_ENDSTOPS  = false; // no radial switch wired yet
 
 // ================ EDIT: DC calibration (from bench measurements) =============
 // Each measured full-travel time INCLUDES a fixed startup dead-time (relay

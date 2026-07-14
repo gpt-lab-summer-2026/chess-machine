@@ -18,9 +18,11 @@
   the board's far corners (default 2 × 8 = 16 slots) holding captured pieces;
   also the source for promotions. 16 slots can't stage a full 32-piece
   reset — see DESIGN.md.
-- **Controller:** ESP32 drives the two positioning axes as **timed DC motors via
-  relay H-bridges** (radial + rotary), the **pulley winch as a ULN2003 stepper**,
-  and the magnet relay, talking to the Pi over USB serial. See [PROTOCOL.md](PROTOCOL.md) and
+- **Controller:** ESP32 drives the **radial** cart as a **timed DC motor via a
+  relay H-bridge**, and the **rotary base + pulley winch as ULN2003 steppers**
+  (the base homes by sweeping a down-looking ultrasound sensor for a box at the
+  home bearing, rather than an endstop switch), plus the magnet relay, talking
+  to the Pi over USB serial. See [PROTOCOL.md](PROTOCOL.md) and
   [../firmware/esp32_chess/README.md](../firmware/esp32_chess/README.md).
 
 ## Why lift-and-carry
@@ -81,7 +83,8 @@ Jog the head (in planar x/z) to the **center of a1**, `mark a1`; jog to the
 Use `goto e4` to verify, and `mag on` / `h -2` to tune `pick_height_mm`.
 Rehearse without hardware using `--mock`.
 
-On the firmware side, set `R_STEPS_PER_MM`, `A_STEPS_PER_DEG`, direction
-inversions, `*_HOME_DIR`, `R_HOME_MM` / `A_HOME_DEG`, the `R`/`A` soft limits,
-and `P_MAX_HEIGHT_MM` at the top of the sketch to match your drivers and
-mechanics.
+On the firmware side, set `R_MS_PER_MM_OUT`/`R_MS_PER_MM_IN` (radial DC timing),
+`A_STEPS_PER_DEG` (base stepper), direction inversions (swap the R H-bridge
+pins, or flip `A_STEP_DIR`/`P_UP_STEP_DIR`), `R_HOME_MM`/`A_HOME_DEG`, the
+`R`/`A` soft limits, and the winch's `WINCH_STROKE_STEPS` at the top of the
+sketch to match your drivers and mechanics.
