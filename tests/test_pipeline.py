@@ -379,3 +379,36 @@ def test_rehome_on_capture_can_be_disabled():
     m.handle("exd5")
     assert m.game.history[-1][1] == "exd5"
     assert ("home",) not in m.choreo.ctl.ops
+
+
+def test_opponent_move_confirms_when_only_slm_resolves():
+    m, _ = make(auto_reply=False)
+    # Transcript lost its destination ("knight"); the SLM recovered a legal move.
+    m._do_opponent_move(Intent(action="opponent_move", text="knight", move="g1f3"))
+    assert m._pending == "confirm_move:g1f3"
+    assert len(m.game.history) == 0              # nothing played yet
+    m.handle("yes")
+    assert m.game.history[0][1] == "Nf3"
+
+
+def test_opponent_move_declined_confirmation_plays_nothing():
+    m, _ = make(auto_reply=False)
+    m._do_opponent_move(Intent(action="opponent_move", text="knight", move="g1f3"))
+    m.handle("no")
+    assert len(m.game.history) == 0
+    assert m._pending is None
+
+
+def test_opponent_move_ungrounded_without_slm_move_reasks():
+    m, tts = make(auto_reply=False)
+    m._do_opponent_move(Intent(action="opponent_move", text="knight", move=None))
+    assert m._pending is None
+    assert len(m.game.history) == 0
+    assert tts.lines                              # it said something (a re-ask)
+
+
+def test_normal_move_still_plays_directly():
+    m, _ = make(auto_reply=False)
+    m.handle("e4")
+    assert m.game.history[0][1] == "e4"
+    assert m._pending is None

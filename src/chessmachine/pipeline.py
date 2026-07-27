@@ -138,8 +138,16 @@ class ChessMachine:
         return " ".join(replies)
 
     def _resolve_pending(self, transcript: str) -> str:
-        """Resolve a yes/no answer to a pending confirmation (new game or undo)."""
+        """Resolve a yes/no answer to a pending confirmation (new game, undo, or
+        a low-confidence move recovered from the SLM)."""
         pending, self._pending = self._pending, None
+        if pending.startswith("confirm_move:"):
+            if not _is_affirmative(transcript):
+                return self._say("Okay, ignoring that. Say your move again?")
+            move = chess.Move.from_uci(pending.split(":", 1)[1])
+            if move not in self.game.board.legal_moves:
+                return self._say("That move isn't legal now; say it again?")
+            return self._play_opponent_move(move)
         if _is_affirmative(transcript):
             if pending == "undo":
                 return self._really_undo()
@@ -251,23 +259,20 @@ class ChessMachine:
         if self.game.is_game_over():
             return self._say(self.game.result_text())
         board = self.game.board
-        # Resolve from the user's literal words first; the SLM's `move` field is
-        # only a fallback. A small model sometimes substitutes a different (or
-        # wrong-color) move — especially when the user plays Black and the few-shot
-        # examples are White moves — and that bogus move would otherwise be played
-        # or rejected, swallowing the user's real move (and the auto-reply with it).
-        candidates: list[chess.Move] = []
-        for text in (intent.text, intent.move):
-            if text:
-                candidates = parse_move(text, board)
-                if candidates:
-                    break
+        # Ground the move in what the user LITERALLY said. The SLM's `move` field
+        # is only a tie-breaker among these candidates, never a source on its own,
+        # so a mangled transcript or a hallucinated move can't actuate a piece.
+        candidates = parse_move(intent.text or "", board)
         if not candidates:
+            # Literal words didn't resolve. If the SLM proposed a single legal
+            # move, CONFIRM it (STT may have dropped a word) rather than guessing.
+            slm_moves = parse_move(intent.move, board) if intent.move else []
+            if len(slm_moves) == 1:
+                self._pending = f"confirm_move:{slm_moves[0].uci()}"
+                return self._say(f"Did you mean {board.san(slm_moves[0])}? Say yes.")
             return self._say(explain_move_failure(intent.text or intent.move or "", board))
-        # If the spoken form was ambiguous (e.g. "knight to f6" with two knights
-        # that reach f6), let the SLM's structured move break the tie — but only
-        # when it resolves to exactly one of the candidates we already found, so
-        # a hallucinated or wrong-color move can't slip in.
+        # Ambiguous literal words: let the SLM's move break the tie, but only when
+        # it resolves to exactly one of the candidates we already found.
         if len(candidates) > 1 and intent.move:
             slm_moves = parse_move(intent.move, board)
             if len(slm_moves) == 1 and slm_moves[0] in candidates:
@@ -275,8 +280,11 @@ class ChessMachine:
         if len(candidates) > 1:
             return self._say(f"ambiguous move: did you mean "
                              f"{describe_candidates(candidates, board)}?")
-        spoken = self._play_move(candidates[0], "Okay,")   # _play_move speaks internally
-        # Auto-reply with the engine's move if it's now our turn.
+        return self._play_opponent_move(candidates[0])
+
+    def _play_opponent_move(self, move: chess.Move) -> str:
+        """Actuate the human's move, then auto-reply with the engine if it's our turn."""
+        spoken = self._play_move(move, "Okay,")   # _play_move speaks internally
         if (self.cfg.app.auto_reply and not self.game.is_game_over()
                 and self.game.is_machine_turn()):
             try:
