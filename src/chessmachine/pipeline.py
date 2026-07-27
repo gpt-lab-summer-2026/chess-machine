@@ -141,7 +141,7 @@ class ChessMachine:
         """Resolve a yes/no answer to a pending confirmation (new game, undo, or
         a low-confidence move recovered from the SLM)."""
         pending, self._pending = self._pending, None
-        if pending.startswith("confirm_move:"):
+        if pending and pending.startswith("confirm_move:"):
             if not _is_affirmative(transcript):
                 return self._say("Okay, ignoring that. Say your move again?")
             move = chess.Move.from_uci(pending.split(":", 1)[1])
