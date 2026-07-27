@@ -6,7 +6,6 @@ def test_examples_are_trimmed():
 
 
 def test_examples_cover_piece_questions_as_analyze():
-    users = [u for u, _ in INTENT_EXAMPLES]
     threat = next((a for u, a in INTENT_EXAMPLES if "threat" in u), None)
     placed = next((a for u, a in INTENT_EXAMPLES if "well placed" in u), None)
     assert threat is not None and '"analyze"' in threat

@@ -1,7 +1,12 @@
 import chess
 import pytest
 
-from chessmachine.nlu.move_parsing import explain_move_failure, normalize_spoken, parse_move
+from chessmachine.nlu.move_parsing import (
+    explain_move_failure,
+    looks_like_analysis,
+    normalize_spoken,
+    parse_move,
+)
 
 
 def ucis(text, board=None):
@@ -105,9 +110,6 @@ def test_explain_named_piece_lists_its_real_moves():
     msg = explain_move_failure("knight to b5", chess.Board()).lower()
     assert "no knight can reach b5" in msg
     assert "nc3" in msg and "nf3" in msg          # a knight's real destinations
-
-
-from chessmachine.nlu.move_parsing import looks_like_analysis
 
 
 @pytest.mark.parametrize("text", [

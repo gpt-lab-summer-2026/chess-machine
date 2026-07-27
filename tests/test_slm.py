@@ -5,11 +5,13 @@ canned string or raising. The fallback is the real `RuleBasedNLU`, so we also
 confirm the SLM degrades to deterministic behavior on any failure.
 """
 import json
+import urllib.error
 
 import chess
 import pytest
 
 from chessmachine.config import SlmConfig
+from chessmachine.nlu.intents import INTENT_ACTIONS_SCHEMA
 from chessmachine.nlu.rule_based import RuleBasedNLU
 from chessmachine.nlu.slm import LlamaCppClient, SlmNLU, _extract_json
 
@@ -131,11 +133,6 @@ def test_chat_server_builds_request_and_parses_response(monkeypatch):
     assert out == "hello"
     assert captured["url"].endswith("/v1/chat/completions")
     assert captured["body"]["response_format"] == {"type": "json_object"}
-
-
-import urllib.error
-
-from chessmachine.nlu.intents import INTENT_ACTIONS_SCHEMA
 
 
 def test_intent_actions_schema_wraps_per_action_schema():
