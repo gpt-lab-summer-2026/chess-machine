@@ -29,30 +29,30 @@ evaluation). Put the question text in "question".
 - "new_game", "undo", "resign", "status", "repeat", "help", "chitchat".
 
 Only fill "move", "difficulty", or "question" when relevant; otherwise omit them.
+
+A question — asking what/which/why/how, or whether a piece or move is good, \
+safe, or threatened, or who is winning — is NEVER a move; use "analyze", never \
+"opponent_move".
+
 Context: {context_line}"""
 
-# Few-shot pairs steer a small model toward strict, correct JSON. They cover the
-# tricky cases: captures, undo phrasings, colour switches, and fillers.
+# A small set of few-shots: the output shape is enforced by the json_schema
+# grammar, so examples only need to teach the tricky MAPPINGS — UCI moves, a
+# bare black reply, the side-swap perspective flip, a compound request, and
+# (critically) that piece/position QUESTIONS are analyze, not moves.
 INTENT_EXAMPLES = [
     ("knight to f3", '{"actions": [{"action": "opponent_move", "move": "g1f3"}]}'),
-    ("I'll play e4", '{"actions": [{"action": "opponent_move", "move": "e2e4"}]}'),
-    ("e5", '{"actions": [{"action": "opponent_move", "move": "e5"}]}'),            # black replies
-    ("knight to f6", '{"actions": [{"action": "opponent_move", "move": "g8f6"}]}'),  # black
-    ("castle kingside", '{"actions": [{"action": "opponent_move", "move": "O-O"}]}'),
+    ("e5", '{"actions": [{"action": "opponent_move", "move": "e5"}]}'),            # black reply
     ("okay, your move", '{"actions": [{"action": "engine_move"}]}'),
-    ("make it harder", '{"actions": [{"action": "set_difficulty", "difficulty": "hard"}]}'),
-    ("set elo to 1600", '{"actions": [{"action": "set_difficulty", "difficulty": "1600"}]}'),
     ("let me play black", '{"actions": [{"action": "set_side", "color": "white"}]}'),
-    ("you take white from here", '{"actions": [{"action": "set_side", "color": "white"}]}'),
     ("switch sides", '{"actions": [{"action": "set_side"}]}'),
     ("give me black and set difficulty to hard",
      '{"actions": [{"action": "set_side", "color": "white"}, '
      '{"action": "set_difficulty", "difficulty": "hard"}]}'),
-    ("who is winning now?", '{"actions": [{"action": "analyze", "question": "who is winning"}]}'),
-    ("what's the best move here", '{"actions": [{"action": "analyze", "question": "best move"}]}'),
-    ("let's start a new game", '{"actions": [{"action": "new_game"}]}'),
-    ("take that back", '{"actions": [{"action": "undo"}]}'),
-    ("recenter the crane", '{"actions": [{"action": "recalibrate"}]}'),
+    ("what is threatening my knight",
+     '{"actions": [{"action": "analyze", "question": "what is threatening my knight"}]}'),
+    ("is my knight on c4 well placed",
+     '{"actions": [{"action": "analyze", "question": "is my knight on c4 well placed"}]}'),
 ]
 
 PHRASE_SYSTEM = """You are a friendly chess opponent speaking out loud. Answer the \
