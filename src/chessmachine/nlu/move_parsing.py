@@ -76,6 +76,31 @@ def looks_like_analysis(transcript: str) -> bool:
     return any(stem in t for stem in _ANALYSIS_STEMS)
 
 
+def question_target_square(question: str, board: chess.Board,
+                           prefer_color: bool) -> int | None:
+    """Resolve a piece/square reference in an analysis question to a board square.
+
+    "...knight on c4..." -> c4; a bare piece word ("my knight") -> that piece if
+    the preferred side has exactly one of them, else None (ambiguous -> caller
+    falls back to a whole-board answer). `prefer_color` is the asker's side (the
+    human); "your"/"you" flips it to the other side. Returns a square index or None.
+    """
+    t = normalize_spoken(question)
+    if re.search(r"\byour\b|\byoure\b|\byou\b", t):
+        prefer_color = not prefer_color
+    squares = _SQUARE_RE.findall(t)
+    if squares:
+        return chess.parse_square(squares[0])
+    ptype = next((pt for word, pt in _PIECE_WORDS.items()
+                  if re.search(rf"\b{word}\b", t)), None)
+    if ptype is None:
+        return None
+    owned = [s for s in chess.SQUARES
+             if (p := board.piece_at(s)) is not None
+             and p.color == prefer_color and p.piece_type == ptype]
+    return owned[0] if len(owned) == 1 else None
+
+
 def _try_exact(text: str, board: chess.Board) -> chess.Move | None:
     s = text.strip()
     # SAN (handles Nf3, exd5, O-O, e8=Q+, ...). parse_san already checks legality.

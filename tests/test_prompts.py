@@ -1,4 +1,9 @@
-from chessmachine.nlu.prompts import INTENT_EXAMPLES, INTENT_SYSTEM, build_intent_messages
+from chessmachine.nlu.prompts import (
+    INTENT_EXAMPLES,
+    INTENT_SYSTEM,
+    build_intent_messages,
+    build_move_comment_messages,
+)
 
 
 def test_examples_are_trimmed():
@@ -21,3 +26,16 @@ def test_build_intent_messages_still_ends_with_user_turn():
                                          "difficulty": "medium"})
     assert msgs[0]["role"] == "system"
     assert msgs[-1] == {"role": "user", "content": "e4"}
+
+
+def test_comment_prompt_attributes_machine_move_first_person():
+    msgs = build_move_comment_messages(
+        {"label": "blunder", "mover_is_machine": True, "san": "Qd1", "tier": "medium"})
+    system = msgs[0]["content"].lower()
+    assert "you are the robot" in system and "first person" in system
+
+
+def test_comment_prompt_addresses_human_move():
+    msgs = build_move_comment_messages(
+        {"label": "blunder", "mover_is_machine": False, "san": "Qd1", "tier": "medium"})
+    assert "the human" in msgs[0]["content"].lower()

@@ -84,7 +84,22 @@ def build_intent_messages(transcript: str, context: dict) -> list[dict]:
 
 
 def facts_to_text(facts: PositionFacts) -> str:
-    lines = [f"evaluation: {facts.get('verdict', 'unknown')}"]
+    lines: list[str] = []
+    sq = facts.get("square")
+    if sq:
+        lines.append(f"the question is about the {sq['color']} {sq['piece']} on {sq['square']}:")
+        lines.append("  attacked by: " + (", ".join(sq["attackers"]) or "nothing"))
+        lines.append("  defended by: " + (", ".join(sq["defenders"]) or "nothing"))
+        flags = []
+        if sq["is_hanging"]:
+            flags.append("hanging (attacked and undefended)")
+        if sq["is_pinned"]:
+            flags.append("pinned to its king")
+        if sq["is_outpost"]:
+            flags.append("on a strong outpost")
+        lines.append("  status: " + ("; ".join(flags) if flags else "not under attack"))
+        lines.append(f"  it controls {sq['controls']} squares")
+    lines.append(f"evaluation: {facts.get('verdict', 'unknown')}")
     mat = facts.get("material", {})
     if mat:
         lines.append(
@@ -115,9 +130,9 @@ def build_analysis_messages(question: str, facts: PositionFacts) -> list[dict]:
 COMMENT_SYSTEM = """You are a chess coach reacting OUT LOUD to a move, for a {tier} player. \
 Speak {length}, natural and suitable for text-to-speech. Use ONLY the facts below — never \
 invent a tactic, evaluation, or piece location, and don't restate the move's notation.
-{teach}
+{attribution}{teach}
 Facts:
-- move played: {san} by {mover}
+- move played: {san} by {mover_desc}
 - assessment: {label}
 - tactics found: {motifs}"""
 
@@ -139,12 +154,24 @@ _TIER_TEACH = {"easy": "If you name a tactic (fork, pin, outpost), briefly expla
 def build_move_comment_messages(info: dict) -> list[dict]:
     tier = info.get("tier", "medium")
     motifs = info.get("motifs") or []
+    # Correct attribution: react in the first person to the robot's OWN move, and
+    # address the human for theirs — so it never blames the human for its blunder.
+    if info.get("mover_is_machine"):
+        mover_desc = "you, the robot"
+        attribution = ("The move was YOURS — you are the robot; react in the first person "
+                       '("I", "my"), not as if the human made it. ')
+        if info.get("punished"):
+            attribution += "The opponent just punished it, so acknowledge that. "
+    else:
+        mover_desc = "the human opponent"
+        attribution = 'The move was the human\'s — address them as "you". '
     system = COMMENT_SYSTEM.format(
         tier=tier,
         length=_TIER_LENGTH.get(tier, _TIER_LENGTH["medium"]),
+        attribution=attribution,
         teach=_TIER_TEACH.get(tier, ""),
         san=info.get("san", "the move"),
-        mover=info.get("mover", "a player"),
+        mover_desc=mover_desc,
         label=_LABEL_WORD.get(info.get("label", "normal"), "a move"),
         motifs="; ".join(motifs) if motifs else "none",
     )

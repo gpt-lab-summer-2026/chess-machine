@@ -6,6 +6,7 @@ from chessmachine.nlu.move_parsing import (
     looks_like_analysis,
     normalize_spoken,
     parse_move,
+    question_target_square,
 )
 
 
@@ -136,3 +137,31 @@ def test_looks_like_analysis_true(text):
 ])
 def test_looks_like_analysis_false(text):
     assert looks_like_analysis(text) is False
+
+
+# -- question_target_square (resolve a piece/square reference) ---------------- #
+def test_target_square_named_square():
+    assert question_target_square("is my knight on c4 well placed", chess.Board(),
+                                  prefer_color=chess.WHITE) == chess.C4
+
+
+def test_target_square_unique_piece():
+    # One white knight on f3 -> "my knight" resolves to it (asker = white).
+    board = chess.Board("4k3/8/8/8/8/5N2/8/4K3 w - - 0 1")
+    assert question_target_square("what is threatening my knight", board,
+                                  prefer_color=chess.WHITE) == chess.F3
+
+
+def test_target_square_ambiguous_returns_none():
+    # Start position has two white knights -> ambiguous -> None (whole-board fallback).
+    assert question_target_square("what threatens my knight", chess.Board(),
+                                  prefer_color=chess.WHITE) is None
+
+
+def test_target_square_your_flips_side():
+    # White knight f3, black knight f6. Asker is white; "your knight" -> black's = f6.
+    board = chess.Board("4k3/8/5n2/8/8/5N2/8/4K3 w - - 0 1")
+    assert question_target_square("what threatens your knight", board,
+                                  prefer_color=chess.WHITE) == chess.F6
+    assert question_target_square("what threatens my knight", board,
+                                  prefer_color=chess.WHITE) == chess.F3

@@ -1,7 +1,7 @@
 """End-to-end orchestration with everything mocked (no hardware, no models)."""
 import chess
 
-from chessmachine.chess_engine.engine import RandomEngine
+from chessmachine.chess_engine.engine import AnalysisResult, RandomEngine
 from chessmachine.config import Config, SlmConfig
 from chessmachine.factory import build_choreographer
 from chessmachine.nlu import create_nlu
@@ -412,3 +412,59 @@ def test_normal_move_still_plays_directly():
     m.handle("e4")
     assert m.game.history[0][1] == "e4"
     assert m._pending is None
+
+
+def test_analyze_answers_piece_question_with_square_facts():
+    # B: a piece/square question gets a grounded, square-specific answer, not a
+    # generic whole-board summary. Machine plays black, so the human is white and
+    # "my knight" resolves to white's knight.
+    m, tts = make(auto_reply=False, play_as="black")
+    m.game.board.set_fen("4k3/8/3p4/4N3/8/8/8/4K3 w - - 0 1")  # white Ne5 hanging to pd6
+    m._do_analyze(Intent(action="analyze", question="what is threatening my knight"))
+    said = " ".join(tts.lines).lower()
+    assert "e5" in said and "hanging" in said
+
+
+class _FixedEval:
+    """Minimal evaluating engine for the deferred-self-critique tests: analyse()
+    returns a fixed White-POV centipawn score regardless of position."""
+    provides_evaluation = True
+
+    def __init__(self, cp):
+        self.cp = cp
+
+    def analyse(self, board):
+        return AnalysisResult(score_cp=self.cp)
+
+
+def _pending_blunder():
+    return {"info": {"label": "blunder", "motifs": [], "difficulty": "medium",
+                     "mover_is_machine": True, "san": "Qd1"},
+            "cp_after": -320}
+
+
+def test_deferred_self_critique_spoken_when_punished():
+    m, _ = make(auto_reply=False, play_as="white")   # machine = white
+    m.engine = _FixedEval(-350)                        # machine still badly worse -> punished
+    m._pending_self_critique = _pending_blunder()
+    bb = chess.Board(); bb.push_san("e4")   # black (human) to move = the opponent's reply
+    out = m._resolve_self_critique(bb)
+    assert "blunder" in out.lower()
+    assert m._pending_self_critique is None
+
+
+def test_deferred_self_critique_dropped_when_not_punished():
+    m, _ = make(auto_reply=False, play_as="white")
+    m.engine = _FixedEval(60)                          # machine recovered -> opponent let it go
+    m._pending_self_critique = _pending_blunder()
+    bb = chess.Board(); bb.push_san("e4")
+    assert m._resolve_self_critique(bb) == ""
+    assert m._pending_self_critique is None
+
+
+def test_deferred_self_critique_waits_on_machines_own_move():
+    m, _ = make(auto_reply=False, play_as="white")
+    m._pending_self_critique = _pending_blunder()
+    bb = chess.Board()   # white (machine) to move -> not the opponent yet
+    assert m._resolve_self_critique(bb) == ""
+    assert m._pending_self_critique is not None        # still held, waiting for the human's reply

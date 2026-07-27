@@ -25,6 +25,7 @@ from .nlu import (
     describe_candidates,
     explain_move_failure,
     parse_move,
+    question_target_square,
     resolve_side_request,
 )
 from .nlu.intents import Intent
@@ -67,6 +68,9 @@ class ChessMachine:
         self.difficulty = config.engine.default_difficulty
         self._last_spoken = ""
         self._pending: str | None = None   # a destructive action awaiting confirmation
+        # A blunder/mistake the MACHINE just made, held back until we see whether
+        # the opponent punishes it (C: only self-critique if it actually costs).
+        self._pending_self_critique: dict | None = None
         self.clock = MatchClock()
 
     # -- lifecycle ----------------------------------------------------------- #
@@ -233,8 +237,17 @@ class ChessMachine:
         return spoken
 
     def _do_analyze(self, intent: Intent) -> str:
-        facts = analysis.describe_position(self.game.board, self.engine, self._last_san())
-        answer = self.nlu.phrase_analysis(intent.question or intent.text or "", facts)
+        board = self.game.board
+        question = intent.question or intent.text or ""
+        facts = analysis.describe_position(board, self.engine, self._last_san())
+        # If the question is about a specific piece/square ("is my knight on c4
+        # good", "what threatens my knight"), attach that square's grounded facts
+        # so the answer is specific instead of a generic whole-board summary.
+        # "my" resolves to the human's side; the helper flips it on "your".
+        target = question_target_square(question, board, prefer_color=not self.machine_color)
+        if target is not None:
+            facts["square"] = analysis.describe_square(board, target)
+        answer = self.nlu.phrase_analysis(question, facts)
         return self._say(answer)
 
     def _do_status(self) -> str:
@@ -397,6 +410,11 @@ class ChessMachine:
         comment = self._move_comment(board_before, move, san)
         if comment:
             text += " " + comment
+        # If the opponent (this move) just punished a blunder the machine held
+        # back, own it now — otherwise it stays unspoken.
+        critique = self._resolve_self_critique(board_before)
+        if critique:
+            text += " " + critique
         if self.game.is_game_over():
             text += " " + self.game.result_text()
 
@@ -453,6 +471,7 @@ class ChessMachine:
             board_after = board_before.copy()
             board_after.push(move)
             mover = board_before.turn
+            mover_is_machine = mover == self.machine_color
             motifs = analysis.find_tactics(board_after, mover)
             if not analysis.should_comment(quality, motifs, self.difficulty):
                 return ""
@@ -466,11 +485,49 @@ class ChessMachine:
                 "tier": analysis.difficulty_tier(self.difficulty),
                 "san": san,
                 "mover": GameState.color_name(mover),
+                "mover_is_machine": mover_is_machine,
             }
+            # C: don't flag the machine's OWN blunder/mistake right away — hold it
+            # back and only voice it if the opponent actually punishes it (checked
+            # after their reply in _resolve_self_critique). Machine's good moves
+            # and all of the human's moves comment immediately, with attribution.
+            if (mover_is_machine and self.cfg.app.self_critique_only_if_punished
+                    and quality.label in ("blunder", "mistake")):
+                res = self.engine.analyse(board_after)
+                self._pending_self_critique = {
+                    "info": info,
+                    "cp_after": analysis.machine_pov_cp(res, self.machine_color == chess.WHITE),
+                }
+                return ""
             return self.nlu.comment_on_move(info)
         except Exception:  # noqa: BLE001 - commentary must never break a move
             log.exception("Move commentary failed")
             return ""
+
+    def _resolve_self_critique(self, board_before: chess.Board) -> str:
+        """Voice a held-back self-critique iff the move just played (by the
+        opponent) punished the machine's earlier blunder. `board_before` is the
+        position before this move; `self.game.board` is already after it. Returns
+        the spoken critique, or "" (drop it silently if the opponent let it go)."""
+        pending = self._pending_self_critique
+        if pending is None:
+            return ""
+        # Only the opponent's reply can "punish" it; if this move is the machine's
+        # own, keep waiting for the human's response.
+        if board_before.turn == self.machine_color:
+            return ""
+        self._pending_self_critique = None
+        if not getattr(self.engine, "provides_evaluation", False):
+            return ""
+        try:
+            res = self.engine.analyse(self.game.board)
+            cp_now = analysis.machine_pov_cp(res, self.machine_color == chess.WHITE)
+            if analysis.blunder_punished(pending["cp_after"], cp_now):
+                info = {**pending["info"], "punished": True}
+                return self.nlu.comment_on_move(info)
+        except Exception:  # noqa: BLE001 - commentary must never break a move
+            log.exception("Deferred self-critique failed")
+        return ""
 
     def _resolve_difficulty(self, name: str) -> tuple[str, DifficultyPreset] | None:
         name = (name or "").strip().lower()

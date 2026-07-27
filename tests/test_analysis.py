@@ -10,16 +10,20 @@ import pytest
 from chessmachine.chess_engine.analysis import (
     MoveQuality,
     _offers_material,
+    blunder_punished,
     classify_move_quality,
     describe_position,
+    describe_square,
     difficulty_tier,
     eval_verdict,
     facts_to_summary,
     find_tactics,
     game_phase,
+    machine_pov_cp,
     material_balance,
     move_comment_summary,
     should_comment,
+    square_summary,
 )
 from chessmachine.chess_engine.engine import AnalysisResult, ChessEngine
 
@@ -204,8 +208,9 @@ def test_describe_position_returns_the_full_facts_contract():
     assert set(facts) == {
         "turn", "fullmove", "phase", "in_check", "legal_moves", "material",
         "score_cp", "mate_in", "verdict", "best_move_san", "pv_sans",
-        "last_move_san", "game_over",
+        "last_move_san", "game_over", "square",
     }
+    assert facts["square"] is None            # only set for a piece/square question
     assert facts["turn"] == "white"
     assert facts["best_move_san"] == "e4"
     assert facts["material"]["diff"] == 0
@@ -255,3 +260,83 @@ def test_classify_blunder():
         after=AnalysisResult(score_cp=-320),   # White's POV after the blunder
     )
     assert classify_move_quality(eng, board, move).label == "blunder"
+
+
+# -- describe_square / square_summary (piece-question facts) ------------------ #
+def test_describe_square_hanging_knight():
+    # White knight on e5 attacked by the black pawn on d6, undefended -> hanging.
+    board = chess.Board("4k3/8/3p4/4N3/8/8/8/4K3 w - - 0 1")
+    sq = describe_square(board, chess.E5)
+    assert sq is not None
+    assert sq["piece"] == "knight" and sq["color"] == "white" and sq["square"] == "e5"
+    assert sq["attackers"] == ["pawn on d6"]
+    assert sq["defenders"] == []
+    assert sq["is_hanging"] is True
+    assert sq["controls"] == 8            # a centralized knight controls 8 squares
+
+
+def test_describe_square_defended_not_hanging():
+    # White knight on e5 attacked by d6 pawn but defended by the rook on e1.
+    board = chess.Board("4k3/8/3p4/4N3/8/8/8/4R1K1 w - - 0 1")
+    sq = describe_square(board, chess.E5)
+    assert sq is not None
+    assert sq["attackers"] == ["pawn on d6"]
+    assert sq["defenders"] == ["rook on e1"]
+    assert sq["is_hanging"] is False
+
+
+def test_describe_square_knight_outpost():
+    # White knight on d5 defended by the c4 pawn, no black pawn can challenge it.
+    board = chess.Board("4k3/8/8/3N4/2P5/8/8/4K3 w - - 0 1")
+    sq = describe_square(board, chess.D5)
+    assert sq is not None
+    assert sq["is_outpost"] is True
+    assert sq["is_hanging"] is False
+
+
+def test_describe_square_empty_is_none():
+    assert describe_square(chess.Board(), chess.E4) is None
+
+
+def test_square_summary_mentions_hanging_and_square():
+    board = chess.Board("4k3/8/3p4/4N3/8/8/8/4K3 w - - 0 1")
+    text = square_summary(describe_square(board, chess.E5)).lower()
+    assert "e5" in text and "hanging" in text and "knight" in text
+
+
+# -- C: attribution + deferred "only if punished" ----------------------------- #
+def test_blunder_punished_when_opponent_keeps_advantage():
+    assert blunder_punished(-300, -320) is True      # opponent grew the edge
+    assert blunder_punished(-300, -260) is True       # small giveback (<100) still punished
+
+
+def test_blunder_not_punished_when_given_back():
+    assert blunder_punished(-300, 50) is False        # opponent handed it right back
+    assert blunder_punished(-300, -150) is False       # gave back more than 100
+
+
+def test_blunder_punished_unknown_eval_defaults_true():
+    assert blunder_punished(None, -300) is True
+    assert blunder_punished(-300, None) is True
+
+
+def test_machine_pov_cp_flips_for_black():
+    res = AnalysisResult(score_cp=200)               # +200 = White is better
+    assert machine_pov_cp(res, machine_is_white=True) == 200
+    assert machine_pov_cp(res, machine_is_white=False) == -200
+
+
+def test_move_comment_summary_attributes_machine_move_first_person():
+    out = move_comment_summary(MoveQuality("blunder"), [], "medium", mover_is_machine=True)
+    assert "i blundered" in out.lower()               # owns it, doesn't blame the human
+
+
+def test_move_comment_summary_addresses_human_move_not_as_self():
+    out = move_comment_summary(MoveQuality("blunder"), [], "medium", mover_is_machine=False)
+    assert "blunder" in out.lower() and "i blundered" not in out.lower()
+
+
+def test_move_comment_summary_punished_frames_it():
+    out = move_comment_summary(MoveQuality("blunder"), [], "medium",
+                               mover_is_machine=True, punished=True)
+    assert "pounced" in out.lower()

@@ -13,6 +13,7 @@ from .move_parsing import (
     looks_like_analysis,
     normalize_spoken,
     parse_move,
+    question_target_square,
 )
 from .rule_based import resolve_side_request
 
@@ -26,6 +27,7 @@ __all__ = [
     "describe_candidates",
     "explain_move_failure",
     "looks_like_analysis",
+    "question_target_square",
     "resolve_side_request",
     "create_nlu",
 ]
