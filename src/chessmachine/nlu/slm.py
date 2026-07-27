@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..config import SlmConfig
 from .base import NLU
-from .intents import Intent, intents_from_json
+from .intents import INTENT_ACTIONS_SCHEMA, Intent, intents_from_json
+from .move_parsing import looks_like_analysis
 from .prompts import build_analysis_messages, build_intent_messages, build_move_comment_messages
 
 if TYPE_CHECKING:
@@ -116,19 +117,35 @@ class SlmNLU(NLU):
         self.fallback = fallback
 
     def interpret(self, transcript: str, context: dict) -> list[Intent]:
-        try:
-            raw = self.client.chat(
-                build_intent_messages(transcript, context),
-                json_mode=True, temperature=0.0, max_tokens=192,
-            )
-            intents = intents_from_json(_extract_json(raw), transcript)
-            known = [i for i in intents if i.action != "unknown"]
-            if known:
-                return known
-            log.info("SLM returned no known action; trying rule-based fallback")
-        except Exception as exc:  # noqa: BLE001 - any failure should degrade gracefully
-            log.warning("SLM interpret failed (%s); using rule-based fallback", exc)
+        last_exc: Exception | None = None
+        for attempt in range(2):          # initial try + one retry
+            try:
+                raw = self.client.chat(
+                    build_intent_messages(transcript, context),
+                    json_mode=True, temperature=0.0, max_tokens=192,
+                    schema=INTENT_ACTIONS_SCHEMA,
+                )
+                intents = intents_from_json(_extract_json(raw), transcript)
+                intents = [self._guard(i, transcript) for i in intents]
+                known = [i for i in intents if i.action != "unknown"]
+                if known:
+                    return known
+                log.info("SLM returned no known action; using rule-based fallback")
+                break                     # parsed OK but nothing usable -> don't retry
+            except Exception as exc:      # noqa: BLE001 - degrade gracefully
+                last_exc = exc
+                log.warning("SLM interpret attempt %d failed (%s)", attempt + 1, exc)
+        if last_exc is not None:
+            log.warning("SLM interpret failed after retry; using rule-based fallback")
         return self.fallback.interpret(transcript, context)
+
+    @staticmethod
+    def _guard(intent: Intent, transcript: str) -> Intent:
+        """Downgrade a misclassified question to analyze. STT-robust; only ever
+        turns opponent_move into analyze, so real moves are never touched."""
+        if intent.action == "opponent_move" and looks_like_analysis(transcript):
+            return Intent(action="analyze", question=transcript, text=transcript)
+        return intent
 
     def phrase_analysis(self, question: str, facts: PositionFacts) -> str:
         try:

@@ -22,7 +22,7 @@ class FakeClient:
         self.raises = raises
         self.calls = 0
 
-    def chat(self, messages, json_mode=False, temperature=None, max_tokens=None):
+    def chat(self, messages, json_mode=False, temperature=None, max_tokens=None, schema=None):
         self.calls += 1
         if self.raises:
             raise RuntimeError("model unavailable")
@@ -71,12 +71,46 @@ def test_interpret_falls_back_on_exception():
     client = FakeClient(raises=True)
     nlu = SlmNLU(client, RuleBasedNLU())
     assert nlu.interpret("take that back", _ctx())[0].action == "undo"
-    assert client.calls == 1                     # the model was tried first
+    assert client.calls == 2                     # initial try + one retry, then fallback
 
 
 def test_interpret_falls_back_on_garbage_output():
     nlu = SlmNLU(FakeClient("no json at all"), RuleBasedNLU())
     assert nlu.interpret("let's start a new game", _ctx())[0].action == "new_game"
+
+
+class FlakyClient:
+    """Raises on the first call, returns `good` after that."""
+    def __init__(self, good):
+        self.good = good
+        self.calls = 0
+
+    def chat(self, messages, json_mode=False, temperature=None, max_tokens=None, schema=None):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("transient")
+        return self.good
+
+
+def test_interpret_retries_once_then_uses_model():
+    client = FlakyClient('{"actions": [{"action": "engine_move"}]}')
+    nlu = SlmNLU(client, RuleBasedNLU())
+    assert nlu.interpret("your move", _ctx())[0].action == "engine_move"
+    assert client.calls == 2
+
+
+def test_interpret_downgrades_question_to_analyze():
+    # SLM misclassifies a question as a move; the guard rewrites it to analyze.
+    reply = '{"actions": [{"action": "opponent_move", "move": "g1f3"}]}'
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    assert nlu.interpret("what is threatening my knight", _ctx())[0].action == "analyze"
+
+
+def test_interpret_keeps_real_move():
+    reply = '{"actions": [{"action": "opponent_move", "move": "e2e4"}]}'
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    out = nlu.interpret("e4", _ctx())
+    assert out[0].action == "opponent_move"
 
 
 # -- phrasing / small talk / commentary -------------------------------------- #
