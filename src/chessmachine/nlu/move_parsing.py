@@ -45,6 +45,37 @@ def normalize_spoken(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+# Cues that mark an utterance as a question / analysis request rather than a
+# move. Kept STT-robust: matched against the NORMALIZED string (no punctuation),
+# because Whisper output usually has no '?'.
+_INTERROGATIVES = {
+    "what", "whats", "which", "where", "why", "how", "hows", "who",
+    "is", "are", "am", "do", "does", "did", "can", "could", "should",
+    "would", "will",
+}
+_ANALYSIS_STEMS = (
+    "threat", "attack", "hang", "defend", "protect", "safe", "danger",
+    "win", "better", "worse", "good", "best", "weak", "strong",
+    "advantage", "worth", "should i", "is it", "how is",
+)
+
+
+def looks_like_analysis(transcript: str) -> bool:
+    """True if the utterance reads as a question / analysis request, not a move.
+
+    Used only to DOWNGRADE a move classification to analyze, so a false positive
+    costs a re-route (the machine answers instead of moving), never a wrong move.
+    Operates on the normalized transcript so it never depends on a '?' that STT
+    tends to drop.
+    """
+    t = normalize_spoken(transcript)
+    if not t:
+        return False
+    if t.split()[0] in _INTERROGATIVES:
+        return True
+    return any(stem in t for stem in _ANALYSIS_STEMS)
+
+
 def _try_exact(text: str, board: chess.Board) -> chess.Move | None:
     s = text.strip()
     # SAN (handles Nf3, exd5, O-O, e8=Q+, ...). parse_san already checks legality.

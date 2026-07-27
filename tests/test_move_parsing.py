@@ -105,3 +105,32 @@ def test_explain_named_piece_lists_its_real_moves():
     msg = explain_move_failure("knight to b5", chess.Board()).lower()
     assert "no knight can reach b5" in msg
     assert "nc3" in msg and "nf3" in msg          # a knight's real destinations
+
+
+from chessmachine.nlu.move_parsing import looks_like_analysis
+
+
+@pytest.mark.parametrize("text", [
+    "what is threatening my knight",     # punctuation-free, Whisper style
+    "is my knight on c4 good",
+    "is my knight on c4 in a good position",
+    "should i take the pawn",
+    "who is winning",
+    "how is my position",
+    "what's the best move",
+    "is my king safe",
+])
+def test_looks_like_analysis_true(text):
+    assert looks_like_analysis(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "e4",
+    "knight to f3",
+    "castle kingside",
+    "bishop takes d5",
+    "e2 to e4",
+    "",
+])
+def test_looks_like_analysis_false(text):
+    assert looks_like_analysis(text) is False

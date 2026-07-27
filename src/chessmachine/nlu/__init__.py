@@ -10,6 +10,7 @@ from .intents import ACTIONS, Intent, intent_from_json
 from .move_parsing import (
     describe_candidates,
     explain_move_failure,
+    looks_like_analysis,
     normalize_spoken,
     parse_move,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "normalize_spoken",
     "describe_candidates",
     "explain_move_failure",
+    "looks_like_analysis",
     "resolve_side_request",
     "create_nlu",
 ]
