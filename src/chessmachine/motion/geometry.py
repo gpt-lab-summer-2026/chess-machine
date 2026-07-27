@@ -36,10 +36,13 @@ class BoardGeometry:
             )
         self.cfg = cfg
 
-    def square_to_point(self, square: int) -> Point:
-        """python-chess square index (a1=0 .. h8=63) -> planar Point (mm)."""
-        file_idx = chess.square_file(square)   # 0..7  (a..h)
-        rank_idx = chess.square_rank(square)   # 0..7  (1..8)
+    def point_from_indices(self, file_idx: float, rank_idx: float) -> Point:
+        """Planar Point (mm) for grid indices, EXTRAPOLATED beyond the board.
+
+        file_idx/rank_idx are 0-based (a1 = 0,0) and may be non-integer or out of
+        [0,7] — so the calibration tool can name where the head actually landed
+        (h9 = 7,8; i8 = 8,7; e4.5 = 4,3.5), not just legal squares.
+        """
         if self.cfg.invert_file:
             file_idx = 7 - file_idx
         if self.cfg.invert_rank:
@@ -59,6 +62,10 @@ class BoardGeometry:
             c, s = math.cos(ang), math.sin(ang)
             dx, dz = c * dx - s * dz, s * dx + c * dz
         return Point(self.cfg.origin_x_mm + dx, self.cfg.origin_z_mm + dz)
+
+    def square_to_point(self, square: int) -> Point:
+        """python-chess square index (a1=0 .. h8=63) -> planar Point (mm)."""
+        return self.point_from_indices(chess.square_file(square), chess.square_rank(square))
 
     def name_to_point(self, name: str) -> Point:
         return self.square_to_point(chess.parse_square(name))

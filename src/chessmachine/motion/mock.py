@@ -21,6 +21,8 @@ class MockMotion(MotionController):
         self.magnet_on = False
         self.connected = False
         self.homed = False
+        self._cal = {"aspd": 43.284, "ahome": 1.063, "rspm": 66.8}
+        self._steps = {"a": 0, "r": 0, "w": 0}
 
     def connect(self) -> None:
         self.connected = True
@@ -34,6 +36,7 @@ class MockMotion(MotionController):
 
     def home(self) -> None:
         self.x = self.z = self.height = 0.0
+        self._steps = {"a": 0, "r": 0, "w": 0}
         self.homed = True
         self.ops.append(("home",))
         log.debug("mock: home")
@@ -63,9 +66,34 @@ class MockMotion(MotionController):
         self.ops.append(("estop",))
         log.debug("mock: estop")
 
+    def get_cal(self) -> dict:
+        return dict(self._cal)
+
+    def set_cal(self, **kw: float) -> dict:
+        for k, v in kw.items():
+            if k in self._cal and v is not None:
+                self._cal[k] = float(v)
+        self.ops.append(("set_cal", dict(self._cal)))
+        log.debug("mock: set_cal %s", self._cal)
+        return dict(self._cal)
+
     def jog_base(self, steps: int) -> None:
+        self._steps["a"] += int(steps)
         self.ops.append(("jog_base", int(steps)))
         log.debug("mock: jog_base %d steps", int(steps))
+
+    def jog_rail(self, steps: int) -> None:
+        self._steps["r"] += int(steps)
+        self.ops.append(("jog_rail", int(steps)))
+        log.debug("mock: jog_rail %d steps", int(steps))
+
+    def jog_winch(self, steps: int) -> None:
+        self._steps["w"] += int(steps)
+        self.ops.append(("jog_winch", int(steps)))
+        log.debug("mock: jog_winch %d steps", int(steps))
+
+    def get_steps(self) -> dict:
+        return dict(self._steps)
 
     # -- test helpers -------------------------------------------------------- #
     def moves(self) -> list[tuple]:

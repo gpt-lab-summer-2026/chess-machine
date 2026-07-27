@@ -31,8 +31,8 @@ from chessmachine.motion.geometry import BoardGeometry  # noqa: E402
 
 CORNERS = ["a1", "h8", "a8", "h1"]   # order requested for calibration
 # Base-stepper spin test: rotate +90 one way, then 180 the other, then back to 0.
-SPIN_SEQUENCE = [(+90, "+90 to one side"),
-                 (-180, "180 to the other side (now -90)"),
+SPIN_SEQUENCE = [(+180, "+90 to one side"),
+                 (-360, "180 to the other side (now -90)"),
                  (+90, "return to 0")]
 
 
@@ -41,6 +41,56 @@ def _pause(auto: float | None, prompt: str) -> None:
         time.sleep(auto)
     else:
         input(prompt)
+
+
+def _run_manual(ctl, geo, g, sp) -> None:
+    """Interactive manual drive for configuration — analogous to relay_jog, but
+    over the chess firmware (SerialMotion). Jog each axis raw, drive winch/magnet,
+    and position over a square to check placement."""
+    print(
+        "Manual drive (config). Commands (one per line):\n"
+        "  a <steps>    jog BASE stepper N half-steps (+/-)     e.g. 'a 500', 'a -1000'\n"
+        "  r <steps>    jog CART N half-steps (+ = out, - = in)  e.g. 'r 800', 'r -600'\n"
+        "  move <sq>    move head over a board square           e.g. 'move e4'\n"
+        "  p up|down|<mm>   winch to travel / pick / a height   e.g. 'p up', 'p 4'\n"
+        "  mag on|off   electromagnet\n"
+        "  home | status | estop | quit\n"
+        "  (jogs bypass tracking -> run 'home' after to re-zero)"
+    )
+    for line in sys.stdin:
+        parts = line.split()
+        if not parts:
+            continue
+        c = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else None
+        try:
+            if c in ("quit", "exit", "q"):
+                break
+            elif c == "a" and arg is not None:
+                ctl.jog_base(int(arg)); print("   base jogged.")
+            elif c == "r" and arg is not None:
+                ctl.jog_rail(int(arg)); print("   cart jogged.")
+            elif c == "move" and arg is not None:
+                p = geo.name_to_point(arg)
+                ctl.move_xz(p.x, p.z, sp.travel_feed)
+                print(f"   over {arg}: r={math.hypot(p.x, p.z):.1f} mm, "
+                      f"theta={math.degrees(math.atan2(p.z, p.x)):+.1f} deg")
+            elif c in ("p", "pulley") and arg is not None:
+                h = g.travel_height_mm if arg == "up" else g.pick_height_mm if arg == "down" else float(arg)
+                ctl.set_pulley(h, sp.lift_feed); print(f"   pulley -> {h:.1f} mm")
+            elif c in ("mag", "m") and arg is not None:
+                on = arg.lower() in ("on", "1", "true"); ctl.magnet(on)
+                print(f"   magnet {'ON' if on else 'OFF'}")
+            elif c == "home":
+                ctl.home(); print("   homed.")
+            elif c == "status":
+                print("   ", ctl.status())
+            elif c == "estop":
+                ctl.estop(); print("   ESTOP — send 'home' to clear.")
+            else:
+                print(f"   ? unknown/incomplete: {line.strip()!r}")
+        except Exception as e:  # noqa: BLE001 - keep the REPL alive on a bad line / transient error
+            print(f"   ! {e}")
 
 
 def _run_spin(ctl, steps_per_deg: float, auto: float | None) -> None:
@@ -66,8 +116,10 @@ def main() -> int:
                     help="dwell S seconds at each step instead of waiting for Enter")
     ap.add_argument("--spin", action="store_true",
                     help="base-stepper spin test (+90, -180, back to 0) instead of the corners")
-    ap.add_argument("--a-steps-per-deg", type=float, default=25.38,
-                    help="base steps/deg for --spin (match firmware A_STEPS_PER_DEG)")
+    ap.add_argument("--manual", action="store_true",
+                    help="interactive manual-drive REPL for configuration (jog axes, winch, magnet)")
+    ap.add_argument("--a-steps-per-deg", type=float, default=11.38,
+                    help="base steps/deg for --spin (match firmware A_STEPS_PER_DEG; 1:1 = 11.38)")
     args = ap.parse_args()
 
     cfg = load_config(args.config) if args.config else Config()
@@ -80,6 +132,12 @@ def main() -> int:
 
     print(f"Connecting ({cfg.motion.backend}) ...", flush=True)
     ctl.connect()
+    if args.manual:
+        try:
+            _run_manual(ctl, geo, g, sp)
+        finally:
+            ctl.close()
+        return 0
     if args.spin:
         try:
             if not args.no_home:
@@ -110,7 +168,12 @@ def main() -> int:
             else:
                 input("   touching — note WHERE it landed, then press Enter for the next corner...")
             ctl.set_pulley(g.travel_height_mm, sp.lift_feed)    # raise before moving on
-        print("\nDone. Report which real square each of a1/h8/a8/h1 actually touched.")
+        print("\nAll four corners done — zeroing the robot ...", flush=True)
+        if not args.no_home:
+            ctl.magnet(False)          # never home while holding anything
+            ctl.home()                 # rail into the inner backplate; base + winch steppers back to 0
+            print("Zeroed: rail seated at the backplate, steppers at home.")
+        print("Report which real square each of a1/h8/a8/h1 actually touched.")
     except KeyboardInterrupt:
         pass
     finally:

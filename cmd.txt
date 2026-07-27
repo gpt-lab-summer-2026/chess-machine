@@ -1,0 +1,3 @@
+python -m chessmachine --config config/config.yaml --text
+
+

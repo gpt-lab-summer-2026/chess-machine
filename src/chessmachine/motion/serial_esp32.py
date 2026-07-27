@@ -135,7 +135,61 @@ class SerialMotion(MotionController):
         soft-angle clamp and does NOT update the tracked angle, so send HOME
         afterwards. Blocks until the move finishes."""
         steps = int(steps)
-        self._command(f"JOG A{steps}", timeout=abs(steps) * 0.006 + 3.0)
+        self._command(f"JOG A{steps}", timeout=abs(steps) * 0.012 + 3.0)
+
+    def jog_rail(self, steps: int) -> None:
+        """Raw radial-cart jog: `JOG R<steps>` (signed half-steps; + = out, - = in).
+        The cart is a stepper now. Updates the step counter (HOME re-zeros it) but
+        NOT the tracked mm, so send HOME afterwards. Blocks."""
+        steps = int(steps)
+        self._command(f"JOG R{steps}", timeout=abs(steps) * 0.02 + 3.0)
+
+    def jog_winch(self, steps: int) -> None:
+        """Raw winch jog: `JOG W<steps>` (signed half-steps; sign per P_UP_STEP_DIR).
+        For sag/height calibration. Updates the winch step counter (HOME re-zeros
+        it). Blocks."""
+        steps = int(steps)
+        self._command(f"JOG W{steps}", timeout=abs(steps) * 0.01 + 3.0)
+
+    # -- live calibration (CAL) --------------------------------------------- #
+    _CAL_KEYS = {"aspd": "ASPD", "ahome": "AHOME", "rspm": "RSPM"}
+
+    def get_cal(self) -> dict:
+        """Read the firmware's current calibration (base steps/deg + home offset,
+        rail steps/mm) as {'aspd','ahome','rspm'}."""
+        return self._parse_cal(self._command("CAL"))
+
+    def set_cal(self, **kw: float) -> dict:
+        """Set any of aspd/ahome/rspm live (no reflash) and return the firmware's
+        read-back. Unknown keys are ignored; empty call just reads."""
+        parts = [f"{self._CAL_KEYS[k]} {float(v):.4f}"
+                 for k, v in kw.items() if k in self._CAL_KEYS and v is not None]
+        return self._parse_cal(self._command("CAL " + " ".join(parts) if parts else "CAL"))
+
+    @staticmethod
+    def _parse_cal(payload: str) -> dict:
+        out: dict = {}
+        inv = {v: k for k, v in SerialMotion._CAL_KEYS.items()}
+        for tok in payload.split():
+            for tag, key in inv.items():
+                if tok.startswith(tag):
+                    try:
+                        out[key] = float(tok[len(tag):])
+                    except ValueError:
+                        pass
+        return out
+
+    def get_steps(self) -> dict:
+        """Raw physical step counts from boot-home, {'a','r','w'} (base, rail,
+        winch). The authoritative position for step-space calibration."""
+        payload = self._command("STEPS")
+        out: dict = {}
+        keys = {"A": "a", "R": "r", "W": "w"}
+        for tok in payload.split():
+            k = keys.get(tok[:1])
+            if k and tok[1:].lstrip("-").isdigit():
+                out[k] = int(tok[1:])
+        return out
 
     def status(self) -> dict:
         payload = self._command("STATUS")
