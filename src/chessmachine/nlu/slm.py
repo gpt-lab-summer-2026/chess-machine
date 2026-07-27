@@ -31,32 +31,50 @@ class LlamaCppClient:
 
     def chat(self, messages: list[dict], json_mode: bool = False,
              temperature: float | None = None,
-             max_tokens: int | None = None) -> str:
+             max_tokens: int | None = None,
+             schema: dict | None = None) -> str:
         temp = self.cfg.temperature if temperature is None else temperature
         maxt = self.cfg.max_tokens if max_tokens is None else max_tokens
         if self.cfg.mode == "inproc":
-            return self._chat_inproc(messages, json_mode, temp, maxt)
-        return self._chat_server(messages, json_mode, temp, maxt)
+            return self._chat_inproc(messages, json_mode, temp, maxt, schema)
+        return self._chat_server(messages, json_mode, temp, maxt, schema)
 
-    def _chat_server(self, messages, json_mode, temperature, max_tokens) -> str:
+    def _chat_server(self, messages, json_mode, temperature, max_tokens,
+                     schema=None) -> str:
         url = self.cfg.server_url.rstrip("/") + "/v1/chat/completions"
-        body = {
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
-        if json_mode:
-            body["response_format"] = {"type": "json_object"}
-        req = urllib.request.Request(
-            url, data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=self.cfg.request_timeout_s) as resp:
-            payload = json.loads(resp.read().decode())
-        return payload["choices"][0]["message"]["content"]
 
-    def _chat_inproc(self, messages, json_mode, temperature, max_tokens) -> str:
+        def _post(response_format) -> str:
+            body = {
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": False,
+                "cache_prompt": False,   # avoid the n_past==n_tokens caching crash
+            }
+            if response_format is not None:
+                body["response_format"] = response_format
+            req = urllib.request.Request(
+                url, data=json.dumps(body).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=self.cfg.request_timeout_s) as resp:
+                payload = json.loads(resp.read().decode())
+            return payload["choices"][0]["message"]["content"]
+
+        if schema is not None:
+            rf = {"type": "json_schema",
+                  "json_schema": {"name": "intent", "schema": schema, "strict": True}}
+            try:
+                return _post(rf)
+            except urllib.error.HTTPError as exc:
+                if exc.code != 400:
+                    raise
+                log.warning("server rejected json_schema (%s); retrying with json_object", exc)
+                return _post({"type": "json_object"})
+        return _post({"type": "json_object"} if json_mode else None)
+
+    def _chat_inproc(self, messages, json_mode, temperature, max_tokens,
+                     schema=None) -> str:
         if self._llm is None:
             from llama_cpp import Llama  # lazy: heavy dependency
             self._llm = Llama(
@@ -67,7 +85,9 @@ class LlamaCppClient:
                 verbose=False,
             )
         kwargs = {"messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-        if json_mode:
+        if schema is not None:
+            kwargs["response_format"] = {"type": "json_object", "schema": schema}
+        elif json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         out = self._llm.create_chat_completion(**kwargs)
         return out["choices"][0]["message"]["content"]

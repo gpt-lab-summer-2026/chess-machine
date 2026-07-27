@@ -39,6 +39,16 @@ INTENT_JSON_SCHEMA = {
     "required": ["action"],
 }
 
+# Wrapper schema for the full {"actions": [...]} reply. Passed to llama.cpp's
+# json_schema response format so the model cannot emit malformed / off-enum JSON.
+INTENT_ACTIONS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "actions": {"type": "array", "items": INTENT_JSON_SCHEMA},
+    },
+    "required": ["actions"],
+}
+
 
 @dataclass
 class Intent:

@@ -131,3 +131,49 @@ def test_chat_server_builds_request_and_parses_response(monkeypatch):
     assert out == "hello"
     assert captured["url"].endswith("/v1/chat/completions")
     assert captured["body"]["response_format"] == {"type": "json_object"}
+
+
+import urllib.error
+
+from chessmachine.nlu.intents import INTENT_ACTIONS_SCHEMA
+
+
+def test_intent_actions_schema_wraps_per_action_schema():
+    from chessmachine.nlu.intents import INTENT_JSON_SCHEMA
+    assert INTENT_ACTIONS_SCHEMA["properties"]["actions"]["items"] is INTENT_JSON_SCHEMA
+    assert INTENT_ACTIONS_SCHEMA["required"] == ["actions"]
+
+
+def test_chat_server_sends_json_schema_and_disables_cache(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        return _FakeResp({"choices": [{"message": {"content": "{}"}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = LlamaCppClient(SlmConfig(mode="server", server_url="http://x:8080"))
+    client.chat([{"role": "user", "content": "hi"}], json_mode=True,
+                schema=INTENT_ACTIONS_SCHEMA)
+
+    assert captured["body"]["response_format"]["type"] == "json_schema"
+    assert captured["body"]["cache_prompt"] is False
+
+
+def test_chat_server_falls_back_to_json_object_on_400(monkeypatch):
+    seen = []
+
+    def fake_urlopen(req, timeout=None):
+        body = json.loads(req.data.decode())
+        seen.append(body["response_format"]["type"])
+        if body["response_format"]["type"] == "json_schema":
+            raise urllib.error.HTTPError(req.full_url, 400, "bad schema", {}, None)
+        return _FakeResp({"choices": [{"message": {"content": '{"actions": []}'}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = LlamaCppClient(SlmConfig(mode="server", server_url="http://x:8080"))
+    out = client.chat([{"role": "user", "content": "hi"}], json_mode=True,
+                      schema={"type": "object"})
+
+    assert seen == ["json_schema", "json_object"]
+    assert out == '{"actions": []}'
