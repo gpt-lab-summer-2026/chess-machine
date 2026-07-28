@@ -75,7 +75,7 @@
 // frames then send AUDIO_END. On-device silence detection ends the window early;
 // Whisper on the Pi makes the final call on what (if anything) was said. Turn-
 // based with the motors: we never record and move at the same time.
-#define MIC_PIN 34
+#define MIC_PIN 4
 const int MIC_FRAME_SAMPLES = 256;                 // samples per streamed frame
 const unsigned long MIC_RECORD_MS = 6000;          // hard cap: always stop by 6 s
 const int MIC_SILENCE_THRESHOLD = 800;             // peak deviation below this = silence (ambient ~500, speech ~2047); tune to the room
