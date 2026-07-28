@@ -23,7 +23,7 @@ audio:
     silence_ms: 800         # trailing silence that ends an utterance
 
 stt:
-  backend: distil_whisper   # distil_whisper | stdin (dev)
+  backend: esp32_whisper    # esp32_whisper (MAX4466 over serial) | distil_whisper (local mic) | stdin (dev)
   model: distil-small.en    # faster-whisper alias -> CTranslate2 (use distil-medium.en for accuracy)
   device: cpu
   compute_type: int8
@@ -62,12 +62,12 @@ engine:
 motion:
   backend: stepmap          # stepmap (ground-truth step map) | serial (geometry) | mock | relay
   stepmap:
-    map_path: config/stepmap.railfixed.json  # per-square step map from scripts/mapboard.py (read at startup)
+    map_path: config/bestmap.json  # per-square step map from scripts/mapboard.py (read at startup)
     pick_below_mm: 30.0     # set_pulley height below this -> lower to the square's calibrated depth
     match_tol_mm: 1.0       # a move must land within this of a mapped square to use the map
   serial:
     port: /dev/ttyUSB0      # Windows: COM3
-    baud: 115200
+    baud: 460800           # MUST match esp32_chess.ino Serial.begin (8 kHz mic audio + commands)
     timeout_s: 90.0        # a full-length rail move is slow: ~26 s cart + 5 s settle. 30 s tripped it.
     home_timeout_s: 120.0  # HOME now seeks the base limit switch (up to a full sweep) then count-homes
                            # the winch + cart — give it plenty of headroom.
