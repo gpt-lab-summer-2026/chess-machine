@@ -54,6 +54,7 @@ class DistilWhisperSTT(STT):
         segments, _info = self.model.transcribe(
             samples, language=self.cfg.language, beam_size=self.cfg.beam_size,
             vad_filter=True,   # drop non-speech regions -> fewer silence hallucinations
+            condition_on_previous_text=False,   # curb cross-utterance hallucination drift
             initial_prompt=self.cfg.prompt or None,   # bias toward chess vocabulary
         )
         return " ".join(seg.text.strip() for seg in segments).strip()
