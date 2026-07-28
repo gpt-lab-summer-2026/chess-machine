@@ -39,9 +39,9 @@ def build_nlu(cfg: Config) -> NLU:
     return create_nlu(cfg.slm)
 
 
-def build_stt(cfg: Config):
+def build_stt(cfg: Config, motion=None):
     from .voice import create_stt
-    return create_stt(cfg.stt, cfg.audio)
+    return create_stt(cfg.stt, cfg.audio, motion=motion)
 
 
 def build_tts(cfg: Config):

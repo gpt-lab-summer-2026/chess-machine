@@ -25,11 +25,16 @@ audio:
     min_speech_ms: 250      # ignore blips shorter than this (avoids phantom moves)
 
 stt:
-  backend: distil_whisper   # distil_whisper | stdin (dev)
+  backend: distil_whisper   # distil_whisper (Pi/USB mic) | esp32_whisper (MAX4466 on the
+                            # ESP32, streamed over the motor serial) | stdin (dev)
   model: distil-small.en    # faster-whisper alias -> CTranslate2 (use distil-medium.en for accuracy)
   device: cpu
   compute_type: int8
   language: en
+  # Biases Whisper toward chess terms so NATURAL speech ("knight to f3", "e4",
+  # "castle") transcribes reliably even at the ESP32 mic's 8 kHz — no phonetic
+  # input needed. Omit to use the built-in chess prompt; set "" to disable.
+  # prompt: "Chess moves and squares: e4, d5, Nf3, Bc4, O-O, knight to f3, ..."
 
 tts:
   backend: kokoro           # kokoro | stdout (dev)

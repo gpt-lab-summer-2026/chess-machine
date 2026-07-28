@@ -69,6 +69,18 @@
 #define MAGNET_PIN 19  // relay "1" for the electromagnet     [single relay]
 #define A_ENDSTOP_PIN 16  // base limit switch -> GND (INPUT_PULLUP). Active (a8 / hard stop) = LOW.
 
+// ================ EDIT: microphone (MAX4466 analog -> GPIO34 / ADC1_CH6) ======
+// GPIO34 is INPUT-ONLY (fine for a mic) and on ADC1, so — unlike ADC2 — it never
+// conflicts with anything else here. Pi-driven: on "LISTEN" we stream audio
+// frames then send AUDIO_END. On-device silence detection ends the window early;
+// Whisper on the Pi makes the final call on what (if anything) was said. Turn-
+// based with the motors: we never record and move at the same time.
+#define MIC_PIN 34
+const int MIC_FRAME_SAMPLES = 256;                 // samples per streamed frame
+const unsigned long MIC_RECORD_MS = 6000;          // hard cap: always stop by 6 s
+const int MIC_SILENCE_THRESHOLD = 800;             // peak deviation below this = silence (ambient ~500, speech ~2047); tune to the room
+const unsigned long MIC_START_TIMEOUT_MS = 2800;   // wait this long for speech to BEGIN, else stop ("heard nothing")
+const unsigned long MIC_SILENCE_HOLD_MS = 2000;    // stop after this much trailing quiet once speech began
 
 // ================ EDIT: magnet relay =========================================
 const bool MAGNET_ACTIVE_LOW = true;       // driver is active-LOW after the rewire (LOW energizes).
@@ -615,6 +627,8 @@ void handleLine(char* line) {
       g_magnetOn = false;
       replyOK();
     } else replyErr("MAG expects ON or OFF");
+  } else if (!strcmp(cmd, "LISTEN")) {
+    recordWindow();   // streams audio frames, ends with AUDIO_END (no OK line)
   } else {
     replyErr("unknown command");
   }
@@ -636,8 +650,46 @@ const char* resetReasonStr() {
   }
 }
 
+// Record and stream audio frames to the Pi, then AUDIO_END. Stops early when no
+// speech begins within MIC_START_TIMEOUT_MS, or after MIC_SILENCE_HOLD_MS of
+// trailing quiet once speech began; always stops by MIC_RECORD_MS. Blocking by
+// design: the Pi sends LISTEN and waits synchronously (no move is in flight).
+// Frame = magic(0xAA 0x55) + length_LE(2) + length bytes of int16 PCM (~8 kHz).
+void recordWindow() {
+  unsigned long start = millis();
+  bool speechStarted = false;
+  unsigned long lastVoiceMs = start;
+  while (millis() - start < MIC_RECORD_MS) {
+    int16_t buf[MIC_FRAME_SAMPLES];
+    int peak = 0;
+    for (int i = 0; i < MIC_FRAME_SAMPLES; i++) {
+      int v = analogRead(MIC_PIN) - 2048;    // 12-bit ADC centered
+      buf[i] = (int16_t)(v << 4);            // 12-bit signed -> 16-bit
+      if (abs(v) > peak) peak = abs(v);
+      delayMicroseconds(100);               // ~8 kHz sample spacing
+    }
+    uint16_t byteLen = (uint16_t)(MIC_FRAME_SAMPLES * 2);
+    Serial.write(0xAA); Serial.write(0x55);
+    Serial.write((uint8_t)(byteLen & 0xFF));
+    Serial.write((uint8_t)(byteLen >> 8));
+    Serial.write((const uint8_t*)buf, byteLen);
+
+    unsigned long now = millis();
+    if (peak >= MIC_SILENCE_THRESHOLD) {
+      speechStarted = true;
+      lastVoiceMs = now;
+    }
+    if (!speechStarted) {
+      if (now - start >= MIC_START_TIMEOUT_MS) break;      // nobody spoke
+    } else if (now - lastVoiceMs >= MIC_SILENCE_HOLD_MS) {
+      break;                                               // speaker finished
+    }
+  }
+  Serial.println("AUDIO_END");
+}
+
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(460800);   // 8 kHz * 16-bit audio + commands need > 115200 (see MAX4466 mic)
 
   // Magnet is ACTIVE-LOW: OFF = GPIO19 HIGH. Write HIGH BEFORE pinMode so the
   // internal pull-up holds it OFF during the pre-init window; then drive it. (A
@@ -661,6 +713,7 @@ void setup() {
   pinMode(A_IN3, OUTPUT);
   pinMode(A_IN4, OUTPUT);
   pinMode(A_ENDSTOP_PIN, INPUT_PULLUP);  // base limit switch to GND (a8 / hard stop)
+  pinMode(MIC_PIN, INPUT);               // MAX4466 analog mic (ADC1, input-only pin)
 
   railRelease();   // rail coils off
   winchRelease();  // winch coils off

@@ -102,13 +102,16 @@ def main(argv=None) -> int:
         datefmt="%H:%M:%S",
     )
 
+    # Build the choreographer first so the esp32_whisper STT can share the motion
+    # controller's serial link (the ESP32 mic streams over the same port).
+    choreo = factory.build_choreographer(cfg.motion)
     machine = ChessMachine(
         config=cfg,
-        stt=factory.build_stt(cfg),
+        stt=factory.build_stt(cfg, motion=getattr(choreo, "ctl", None)),
         tts=factory.build_tts(cfg),
         nlu=factory.build_nlu(cfg),
         engine=factory.build_engine(cfg),
-        choreographer=factory.build_choreographer(cfg.motion),
+        choreographer=choreo,
     )
 
     machine.start(home=not args.no_home)

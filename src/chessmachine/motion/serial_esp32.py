@@ -54,6 +54,13 @@ class SerialMotion(MotionController):
             finally:
                 self._ser = None
 
+    @property
+    def serial(self) -> Any:
+        """The live pyserial handle (or None before connect()). Exposed so the
+        ESP32 mic capture can share this ONE port — the chess machine is turn-
+        based, so the mic and the motors never use it at the same time."""
+        return self._ser
+
     # -- transport ----------------------------------------------------------- #
     def _readline(self, deadline: float) -> str:
         while time.time() < deadline:
