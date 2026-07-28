@@ -33,16 +33,19 @@ class LlamaCppClient:
     def chat(self, messages: list[dict], json_mode: bool = False,
              temperature: float | None = None,
              max_tokens: int | None = None,
-             schema: dict | None = None) -> str:
+             schema: dict | None = None,
+             timeout: float | None = None) -> str:
         temp = self.cfg.temperature if temperature is None else temperature
         maxt = self.cfg.max_tokens if max_tokens is None else max_tokens
+        to = self.cfg.request_timeout_s if timeout is None else timeout
         if self.cfg.mode == "inproc":
             return self._chat_inproc(messages, json_mode, temp, maxt, schema)
-        return self._chat_server(messages, json_mode, temp, maxt, schema)
+        return self._chat_server(messages, json_mode, temp, maxt, schema, to)
 
     def _chat_server(self, messages, json_mode, temperature, max_tokens,
-                     schema=None) -> str:
+                     schema=None, timeout=None) -> str:
         url = self.cfg.server_url.rstrip("/") + "/v1/chat/completions"
+        to = self.cfg.request_timeout_s if timeout is None else timeout
 
         def _post(response_format) -> str:
             body = {
@@ -58,7 +61,7 @@ class LlamaCppClient:
                 url, data=json.dumps(body).encode(),
                 headers={"Content-Type": "application/json"},
             )
-            with urllib.request.urlopen(req, timeout=self.cfg.request_timeout_s) as resp:
+            with urllib.request.urlopen(req, timeout=to) as resp:
                 payload = json.loads(resp.read().decode())
             return payload["choices"][0]["message"]["content"]
 
@@ -115,6 +118,19 @@ class SlmNLU(NLU):
     def __init__(self, client: LlamaCppClient, fallback: NLU):
         self.client = client
         self.fallback = fallback
+
+    def warmup(self) -> None:
+        """Pay the model's cold-start now (a tiny generation) so the first REAL
+        move doesn't race a still-loading server and time out. Uses a long
+        timeout to absorb model load on a cold Pi; failures are non-fatal (the
+        server may just be down, in which case we fall back to rule-based)."""
+        try:
+            self.client.chat([{"role": "user", "content": "ok"}],
+                             temperature=0.0, max_tokens=1,
+                             timeout=self.client.cfg.warmup_timeout_s)
+            log.info("SLM warmed up")
+        except Exception as exc:  # noqa: BLE001 - warmup must never block startup
+            log.info("SLM warmup skipped (%s); will use rule-based until it responds", exc)
 
     def interpret(self, transcript: str, context: dict) -> list[Intent]:
         last_exc: Exception | None = None

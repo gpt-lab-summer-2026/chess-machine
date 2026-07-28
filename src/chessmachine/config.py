@@ -84,6 +84,7 @@ class SlmConfig:
     temperature: float = 0.2
     max_tokens: int = 256
     request_timeout_s: float = 30.0
+    warmup_timeout_s: float = 180.0          # cold model load on a Pi can take a while; warm-up absorbs it
 
 
 # --------------------------------------------------------------------------- #

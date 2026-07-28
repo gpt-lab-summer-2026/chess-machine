@@ -208,3 +208,29 @@ def test_chat_server_falls_back_to_json_object_on_400(monkeypatch):
 
     assert seen == ["json_schema", "json_object"]
     assert out == '{"actions": []}'
+
+
+# -- warmup (absorbs SLM cold-start at startup) ------------------------------ #
+def test_warmup_uses_long_timeout_and_swallows_errors():
+    import types
+    seen = {}
+
+    class WarmFake:
+        cfg = types.SimpleNamespace(warmup_timeout_s=123.0)
+
+        def chat(self, messages, temperature=None, max_tokens=None, timeout=None, **kw):
+            seen["timeout"] = timeout
+            seen["max_tokens"] = max_tokens
+            return "ok"
+
+    SlmNLU(WarmFake(), RuleBasedNLU()).warmup()
+    assert seen["timeout"] == 123.0          # cold-load-tolerant timeout, not the 30 s default
+    assert seen["max_tokens"] == 1           # a tiny generation, just to launch the slot
+
+    class Boom:
+        cfg = types.SimpleNamespace(warmup_timeout_s=1.0)
+
+        def chat(self, *a, **k):
+            raise RuntimeError("server down")
+
+    SlmNLU(Boom(), RuleBasedNLU()).warmup()  # must NOT raise (non-fatal at startup)
