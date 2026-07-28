@@ -5,10 +5,13 @@ WHY (vs tune.py): tune.py fits a 1-D scale+offset on the base ANGLE and a 1-D
 scale on the rail RADIUS. In polar (r, theta) that can rotate/shift/stretch the
 board but CANNOT move the pivot or fix a skew -- so aligning the a1-h8 diagonal
 warps the a8-h1 one, forever. This tool throws the geometry model away: you JOG
-the head to each real corner, GREENLIGHT it as ground truth (its raw base/rail/
-winch step counts read straight from the firmware), and every other square is
-bilinearly interpolated between the four measured corners. No origin, pitch,
-steps/deg or steps/mm -- just measured truth at the corners.
+the head to real squares, GREENLIGHT each as ground truth (its raw base/rail/winch
+step counts read straight from the firmware), and a THIN-PLATE SPLINE is fit through
+ALL of them -- the four corners plus any mid-board anchors -- to fill the 64-square
+table. The spline honors every anchor EXACTLY and bends smoothly between them, so
+each mid anchor you add corrects the curvature a 4-corner fit misses (with just the
+four corners it stays within ~2 mm of the old bilinear). No origin, pitch, steps/deg
+or steps/mm -- measured truth plus a smooth fit.
 
 It also captures WINCH depth per corner, so the crane's SAG is calibrated: the arm
 droops when the cart is extended, so the magnet at a1 hangs lower than at h8 and
@@ -26,10 +29,10 @@ Workflow:
                         (`mag on` to feel it grab); the winch count is its depth
   4. `set a1`           greenlight: log (base, rail, winch) as a1's truth
   5. `wtop`             raise the winch back before moving to the next corner
-  6. repeat for h1, a8, h8 (the four corners); optionally `set e4` as a mid check
-  7. `map`              build + print the 64-square table, corner deltas, sag delta
-  8. `goto <sq>`        drive to a square's interpolated base/rail (verify)
-  9. `save map.json`    export anchors + table
+  6. repeat h1, a8, h8, then add mid-board anchors (e4, c6, ...) to pin curvature
+  7. `map`              fit the spline; print corner deltas, sag, + leave-one-out accuracy
+  8. `goto <sq>`        drive to a square's fitted base/rail (verify)
+  9. `save map.json`    export anchors + the fitted 64-square table
 
 Commands:
   a <n> / r <n> / w <n>   jog base / rail / winch by N raw steps (signed)
@@ -37,19 +40,22 @@ Commands:
   pos             show current step position
   set <sq>        capture current pose as <sq>'s ground truth
   anchors         list captured anchors          del <sq>   remove one
-  map             interpolate all squares; print deltas, sag, residuals
-  goto <sq>       drive to <sq>'s interpolated base/rail (verify)
+  load <path>     load anchors from a saved map file (to re-fit / add more)
+  map             fit the spline over ALL anchors; print deltas, sag, leave-one-out error
+  goto <sq>       drive to <sq>'s fitted base/rail (verify)
   seek            measure the base limit-switch offset -> A_ENDSTOP_STEPS (HOME first)
   mag on|off      electromagnet
   home | pos | save [path] | estop | quit
 
     python scripts/anchor.py --config config/config.yaml
     python scripts/anchor.py --mock
+    python scripts/anchor.py --refit map.json [--out new.json]   # offline re-fit, no hardware
 """
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib
 import re
 import sys
@@ -73,12 +79,79 @@ def sq_uv(name: str) -> tuple[int, int]:
     return FILES.index(m.group(1).lower()), int(m.group(2)) - 1
 
 
-def bilinear(f: int, r: int, c: dict) -> float:
-    """Interpolate a per-corner value at board square (file f, rank r), 0..7.
-    Corners: a1=(0,0) h1=(7,0) a8=(0,7) h8=(7,7)."""
-    u, v = f / 7.0, r / 7.0
-    return (c["a1"] * (1 - u) * (1 - v) + c["h1"] * u * (1 - v)
-            + c["a8"] * (1 - u) * v + c["h8"] * u * v)
+def _solve(A: list[list[float]], b: list[float]) -> list[float] | None:
+    """Solve A x = b (A square) by Gaussian elimination w/ partial pivoting.
+    Returns x, or None if the system is singular. Pure Python (no numpy)."""
+    n = len(A)
+    M = [row[:] + [b[i]] for i, row in enumerate(A)]
+    for col in range(n):
+        piv = max(range(col, n), key=lambda r: abs(M[r][col]))
+        if abs(M[piv][col]) < 1e-9:
+            return None
+        M[col], M[piv] = M[piv], M[col]
+        pv = M[col][col]
+        for r in range(n):
+            if r == col:
+                continue
+            factor = M[r][col] / pv
+            if factor:
+                for k in range(col, n + 1):
+                    M[r][k] -= factor * M[col][k]
+    return [M[i][n] / M[i][i] for i in range(n)]
+
+
+def _phi(r2: float) -> float:
+    """Thin-plate radial basis phi(r) = r^2 * ln(r), taking r^2 (phi(0) = 0)."""
+    return 0.0 if r2 <= 1e-12 else 0.5 * r2 * math.log(r2)
+
+
+class _TPS:
+    """Thin-plate spline through scattered 2-D points -> a smooth interpolant.
+
+    Fits f(u,v) = a0 + a1*u + a2*v + sum_i w_i*phi(|p - p_i|): passes through EVERY
+    anchor exactly and minimizes bending between them. With coplanar values the
+    weights vanish and it's just the affine plane; in general each extra anchor adds
+    exactly the curvature it measures (4 corners stay within ~2 mm of bilinear)."""
+    def __init__(self, pts: list[tuple[float, float]], vals: list[float]):
+        n = len(pts)
+        A = [[0.0] * (n + 3) for _ in range(n + 3)]
+        b = [0.0] * (n + 3)
+        for i in range(n):
+            for j in range(n):
+                du, dv = pts[i][0] - pts[j][0], pts[i][1] - pts[j][1]
+                A[i][j] = _phi(du * du + dv * dv)
+            A[i][n], A[i][n + 1], A[i][n + 2] = 1.0, pts[i][0], pts[i][1]
+            A[n][i], A[n + 1][i], A[n + 2][i] = 1.0, pts[i][0], pts[i][1]
+            b[i] = vals[i]
+        sol = _solve(A, b)
+        if sol is None:
+            raise ValueError("spline system singular (anchors collinear or duplicated)")
+        self.pts, self.w, self.a = pts, sol[:n], sol[n:]
+
+    def __call__(self, u: float, v: float) -> float:
+        s = self.a[0] + self.a[1] * u + self.a[2] * v
+        for (pu, pv), wi in zip(self.pts, self.w):
+            du, dv = u - pu, v - pv
+            s += wi * _phi(du * du + dv * dv)
+        return s
+
+
+def _fit(anchors: dict, names: list[str]) -> dict | None:
+    """Fit one TPS per key (base/rail/winch) over the named anchors, in normalized
+    board coords (file/7, rank/7). None if too few or a degenerate (collinear) set."""
+    if len(names) < 4:
+        return None
+    pts = []
+    for s in names:
+        f, r = sq_uv(s)
+        pts.append((f / 7.0, r / 7.0))
+    fits: dict = {}
+    for k in KEYS:
+        try:
+            fits[k] = _TPS(pts, [anchors[s][k] for s in names])
+        except ValueError:
+            return None
+    return fits
 
 
 class StepMap:
@@ -127,47 +200,61 @@ class StepMap:
         self.anchors[sq.lower()] = {"base": a, "rail": r, "winch": w}
         print(f"   set {sq.lower()}: base={a} rail={r} winch={w}   (ground truth)")
 
-    def _corner_vals(self) -> dict:
-        return {k: {c: self.anchors[c][k] for c in CORNERS} for k in KEYS}
-
     def build(self) -> dict | None:
-        missing = [c for c in CORNERS if c not in self.anchors]
-        if missing:
-            print(f"   need all 4 corners first; missing {missing}")
+        names = list(self.anchors)
+        fits = _fit(self.anchors, names)
+        if fits is None:
+            print(f"   need >=4 non-collinear anchors to fit a table (have {len(names)})")
             return None
-        cv = self._corner_vals()
         table: dict[str, dict] = {}
         for f in range(8):
             for r in range(8):
-                table[FILES[f] + str(r + 1)] = {k: round(bilinear(f, r, cv[k])) for k in KEYS}
+                u, v = f / 7.0, r / 7.0
+                table[FILES[f] + str(r + 1)] = {k: round(fits[k](u, v)) for k in KEYS}
         return table
 
     def report(self) -> dict | None:
         table = self.build()
         if not table:
             return None
+        A = self.anchors
 
-        def d(s1: str, s2: str, k: str) -> int:
-            return self.anchors[s2][k] - self.anchors[s1][k]
+        def have(*sqs: str) -> bool:
+            return all(s in A for s in sqs)
 
+        print(f"   fitted a thin-plate spline through {len(A)} anchors "
+              "(each honored exactly; smooth between).")
         print("   corner step-distances (base, rail, winch):")
         for s1, s2 in [("a1", "a8"), ("h1", "h8"), ("a1", "h1"),
                        ("a8", "h8"), ("a1", "h8"), ("a8", "h1")]:
-            print(f"     {s1}->{s2}:  base {d(s1, s2, 'base'):+6d}   "
-                  f"rail {d(s1, s2, 'rail'):+6d}   winch {d(s1, s2, 'winch'):+6d}")
-        wa1, wh8 = self.anchors["a1"]["winch"], self.anchors["h8"]["winch"]
-        print(f"   SAG (winch touch depth):  a1={wa1}  h8={wh8}  -> a1 needs {wh8 - wa1:+d} "
-              "steps less than h8 (arm droops when extended)")
+            if have(s1, s2):
+                print(f"     {s1}->{s2}:  base {A[s2]['base']-A[s1]['base']:+6d}   "
+                      f"rail {A[s2]['rail']-A[s1]['rail']:+6d}   winch {A[s2]['winch']-A[s1]['winch']:+6d}")
+        if have("a1", "h8"):
+            wa1, wh8 = A["a1"]["winch"], A["h8"]["winch"]
+            print(f"   SAG (winch touch depth):  a1={wa1}  h8={wh8}  -> a1 needs {wh8 - wa1:+d} "
+                  "steps less than h8 (arm droops when extended)")
 
-        extra = [s for s in self.anchors if s not in CORNERS]
-        if extra:
-            cv = self._corner_vals()
-            print("   bilinear residual at extra anchors (measured - interpolated):")
-            for s in extra:
+        # Leave-one-out: drop each anchor, refit, predict it. At anchors the spline
+        # is exact, so this is the HONEST accuracy BETWEEN measurements — a big LOO
+        # error at a square means the curvature there wants another anchor nearby.
+        names = list(A)
+        if len(names) >= 5:
+            print("   leave-one-out residuals (measured - predicted-without-it):")
+            worst = 0
+            for s in names:
+                fits = _fit(A, [o for o in names if o != s])
+                if fits is None:
+                    continue
                 f, r = sq_uv(s)
-                print(f"     {s}:  " + "   ".join(
-                    f"{k} {self.anchors[s][k] - round(bilinear(f, r, cv[k])):+5d}" for k in KEYS)
-                    + "   (large -> corners alone miss the curvature; add mid anchors)")
+                u, v = f / 7.0, r / 7.0
+                errs = {k: A[s][k] - round(fits[k](u, v)) for k in KEYS}
+                worst = max(worst, abs(errs["base"]), abs(errs["rail"]))
+                print(f"     {s}:  " + "   ".join(f"{k} {errs[k]:+5d}" for k in KEYS))
+            print(f"   worst base/rail LOO error: {worst} steps (rail ~{worst/50.0:.1f} mm). "
+                  "Add an anchor near the worst square to shrink it.")
+        else:
+            print("   (add >=5 anchors for a leave-one-out accuracy check)")
         return table
 
     def goto(self, sq: str) -> None:
@@ -195,7 +282,27 @@ class StepMap:
         p = pathlib.Path(path or "stepmap.json")
         p.write_text(json.dumps(out, indent=2))
         print(f"   wrote {p} ({len(self.anchors)} anchors"
-              + (", full 64-square table)" if table else ", no table yet — need 4 corners)"))
+              + (", refitted 64-square table)" if table else ", no table yet — need >=4 anchors)"))
+
+    def load(self, path: str) -> None:
+        """Pull the raw anchors out of a saved map file so they can be re-fit (and
+        more added). Reads the `anchors` section — the game only ever used `table`,
+        so every measurement you took is preserved there."""
+        data = json.loads(pathlib.Path(path).read_text())
+        anchors = data.get("anchors")
+        if not anchors:
+            print(f"   {path}: no 'anchors' section to re-fit (only a derived table?).")
+            return
+        loaded: dict[str, dict] = {}
+        for name, v in anchors.items():
+            try:
+                sq_uv(name)
+            except ValueError:
+                continue                                  # skip non-board keys
+            if all(k in v for k in KEYS):
+                loaded[name.lower()] = {k: int(v[k]) for k in KEYS}
+        self.anchors = loaded
+        print(f"   loaded {len(loaded)} anchors from {path}: {' '.join(sorted(loaded))}")
 
 
 def _int(s: str | None) -> int:
@@ -208,15 +315,33 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Ground-truth step-map calibration")
     ap.add_argument("--config", help="YAML config (serial port)")
     ap.add_argument("--mock", action="store_true", help="mock backend (no hardware)")
+    ap.add_argument("--load", metavar="MAP", help="pre-load anchors from a saved map file")
+    ap.add_argument("--refit", metavar="MAP",
+                    help="OFFLINE: re-fit a saved map's anchors and rewrite its table (no hardware)")
+    ap.add_argument("--out", help="output path for --refit (default: overwrite the input)")
     args = ap.parse_args()
 
     cfg = load_config(args.config) if args.config else Config()
+
+    # Offline re-fit: no serial, no connect() — just load anchors, fit, report, write.
+    if args.refit:
+        cfg.motion.backend = "mock"           # controller built but never connected
+        m = StepMap(cfg)
+        m.load(args.refit)
+        if not m.anchors:
+            return 1
+        m.report()
+        m.save(args.out or args.refit)
+        return 0
+
     # Bench tool: drive the raw serial transport (or mock), never the stepmap backend.
     cfg.motion.backend = "mock" if args.mock else "serial"
     m = StepMap(cfg)
     m.connect()
-    print("Commands: a/r/w <n> | wtop | pos | set <sq> | anchors | del <sq> | map "
-          "| goto <sq> | seek | mag on|off | home | save | quit")
+    if args.load:
+        m.load(args.load)
+    print("Commands: a/r/w <n> | wtop | pos | set <sq> | anchors | del <sq> | load <path> | "
+          "map | goto <sq> | seek | mag on|off | home | save | quit")
 
     try:
         for line in _prompt():
@@ -243,6 +368,8 @@ def main() -> int:
                         print("   (none)")
                 elif c == "del" and arg:
                     m.anchors.pop(arg.lower(), None); print(f"   removed {arg.lower()}")
+                elif c == "load" and arg:
+                    m.load(arg)
                 elif c in ("map", "build"):
                     m.report()
                 elif c == "goto" and arg:
