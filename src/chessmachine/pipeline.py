@@ -67,6 +67,7 @@ class ChessMachine:
         self.difficulty = config.engine.default_difficulty
         self._last_spoken = ""
         self._pending: str | None = None   # a destructive action awaiting confirmation
+        self._moves_since_home = 0         # finished machine moves since the last re-home (cadence)
         self.clock = MatchClock()
 
     # -- lifecycle ----------------------------------------------------------- #
@@ -352,6 +353,7 @@ class ChessMachine:
         "" on success, or an already-spoken error line on failure."""
         try:
             self.choreo.home()
+            self._moves_since_home = 0
             return ""
         except Exception:  # noqa: BLE001 - a failed re-home must not abort the turn
             log.exception("Re-home failed")
@@ -402,14 +404,20 @@ class ChessMachine:
                 finished_ok = False
                 self._say("I couldn't finish moving that piece — please check the "
                           "board matches the position before we continue.")
-        # Re-home to re-zero open-loop drift. By default this runs after EVERY
-        # finished move; rehome_on_capture is the narrower fallback (captures add
-        # an extra pick-and-place, the biggest drift source). Skip it if actuation
-        # didn't finish, so we don't drag a stuck piece.
-        if finished_ok and (self.cfg.app.rehome_after_move
-                            or (self.cfg.app.rehome_on_capture
-                                and board_before.is_capture(move))):
-            self._rehome()              # silent unless it fails
+        # Re-home to re-zero open-loop drift. Skip it if actuation didn't finish, so
+        # we don't drag a stuck piece. Three triggers (any fires): every finished move
+        # (rehome_after_move); after a capture (rehome_on_capture — the biggest drift
+        # source, an extra pick-and-place); or every N finished moves
+        # (rehome_every_n_moves). With the base limit switch, drift is bounded, so the
+        # every-N cadence gives accuracy without homing (~20-30 s each) on every turn.
+        if finished_ok:
+            self._moves_since_home += 1
+            due = (self.cfg.app.rehome_after_move
+                   or (self.cfg.app.rehome_on_capture and board_before.is_capture(move))
+                   or (self.cfg.app.rehome_every_n_moves > 0
+                       and self._moves_since_home >= self.cfg.app.rehome_every_n_moves))
+            if due:
+                self._rehome()          # silent unless it fails (resets the counter)
         return text
 
     def _spawn_motion(self, complete) -> tuple[threading.Thread, dict]:

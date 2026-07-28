@@ -71,21 +71,24 @@ class BoardGeometry:
         return self.square_to_point(chess.parse_square(name))
 
     def graveyard_slots(self) -> list[Point]:
-        """Off-board storage: two symmetric arcs in the leftover sector.
+        """Off-board storage: two concentric arcs on ONE side of the bisector.
 
-        Slots sit at `graveyard_radius_mm` (beyond the board's far corners, so
-        the whole arc clears the board), spread between `graveyard_inner_deg` and
-        `graveyard_outer_deg` on each side of the bisector. Filled
-        positive-angle side first, inner angle first.
+        Both arcs sit on `graveyard_side` (-1 = h1/-theta): the a8/+theta side is
+        now blocked by the base limit switch + hard stop, so all storage lives on
+        the reachable side. `graveyard_radius_mm` is the outer arc and
+        `graveyard_radius2_mm` the inner one (radially separated so pieces on the two
+        arcs don't collide), each holding `graveyard_slots_per_side` slots spread
+        between `graveyard_inner_deg` and `graveyard_outer_deg`. Both radii clear the
+        board's z-extent at these angles. Filled outer arc first, inner angle first.
         """
-        r = self.cfg.graveyard_radius_mm
         n = self.cfg.graveyard_slots_per_side
         inner = self.cfg.graveyard_inner_deg
         outer = self.cfg.graveyard_outer_deg
+        side = self.cfg.graveyard_side
         slots: list[Point] = []
-        for sign in (1.0, -1.0):
+        for r in (self.cfg.graveyard_radius_mm, self.cfg.graveyard_radius2_mm):
             for k in range(n):
                 frac = k / (n - 1) if n > 1 else 0.0
-                theta = math.radians(sign * (inner + (outer - inner) * frac))
+                theta = math.radians(side * (inner + (outer - inner) * frac))
                 slots.append(Point(r * math.cos(theta), r * math.sin(theta)))
         return slots

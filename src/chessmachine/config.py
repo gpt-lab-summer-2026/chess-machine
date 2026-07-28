@@ -118,7 +118,8 @@ class SerialConfig:
     baud: int = 115200
     timeout_s: float = 5.0
     connect_settle_s: float = 2.0     # ESP32 auto-resets when the port opens
-    home_timeout_s: float = 60.0      # homing can be slow
+    home_timeout_s: float = 120.0     # homing is slow: base seeks its switch (full sweep worst case)
+                                      # + sensorless winch/cart count-home
     # The electromagnet hangs a fixed distance to the SIDE of the arm (the winch's
     # mounting offset), so the transport aims the CART past the target square by
     # asin(offset/reach). Signed: flip the sign if placements land on the wrong
@@ -140,6 +141,18 @@ class RelayConfig:
     timeout_s: float = 5.0
     connect_settle_s: float = 2.0     # ESP32 auto-resets when the port opens
     pulse_ms: int = 800               # how long to run the motor per move
+
+
+@dataclass
+class StepMapConfig:
+    """Ground-truth per-square step map (scripts/mapboard.py) consumed by the
+    `stepmap` motion backend. Board squares drive from measured absolute step
+    counts (no geometry model); off-board points (the graveyard) fall back to the
+    geometry/MOVE path on the same transport."""
+    map_path: str = "config/stepmap.json"   # JSON written by scripts/mapboard.py
+    pick_below_mm: float = 30.0              # a set_pulley height below this = lower to the
+                                             # square's calibrated pick depth; above = raise to travel
+    match_tol_mm: float = 1.0                # how close a move_xz point must be to a mapped square
 
 
 @dataclass
@@ -178,10 +191,14 @@ class GeometryConfig:
     # arc out here clears the board entirely). 2 sides x 8 = 16 slots. A full reset
     # needs 32 slots, so with 16 the machine asks for a manual reset (see
     # Choreographer.setup_starting_position).
-    graveyard_radius_mm: float = 293.0   # within r_max; its arc clears the board z-extent
-    graveyard_slots_per_side: int = 8
+    graveyard_radius_mm: float = 293.0   # OUTER storage arc (within r_max; clears the board z-extent)
+    graveyard_radius2_mm: float = 250.0  # INNER storage arc — a 2nd concentric arc so all slots fit on
+                                         # ONE side (the base a8/+theta side is blocked by the limit switch)
+    graveyard_slots_per_side: int = 8    # slots PER ARC; two arcs -> 2x this many total
     graveyard_inner_deg: float = 26.0    # slot angle nearest the bisector
     graveyard_outer_deg: float = 49.0    # slot angle nearest the sector edge
+    graveyard_side: float = -1.0         # which side the arcs sit on: -1 = h1/-theta (REACHABLE);
+                                         # +1 = a8 side (blocked by the base limit switch / hard stop)
 
 
 @dataclass
@@ -198,9 +215,11 @@ class MagnetConfig:
 
 @dataclass
 class MotionConfig:
-    backend: str = "relay"            # relay (DC-motor prototype) | serial (crane) | mock (dev)
+    backend: str = "relay"            # relay (DC prototype) | serial (crane, geometry) | stepmap
+                                      # (crane, ground-truth step map) | mock (dev)
     serial: SerialConfig = field(default_factory=SerialConfig)
     relay: RelayConfig = field(default_factory=RelayConfig)
+    stepmap: StepMapConfig = field(default_factory=StepMapConfig)
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
     speeds: SpeedsConfig = field(default_factory=SpeedsConfig)
     magnet: MagnetConfig = field(default_factory=MagnetConfig)
@@ -219,6 +238,8 @@ class AppConfig:
     match_clock: bool = True          # track the human's thinking time (their clock only)
     rehome_after_move: bool = True    # re-home after EVERY finished move to zero open-loop drift
     rehome_on_capture: bool = True    # re-home after a capture (subsumed by rehome_after_move when on)
+    rehome_every_n_moves: int = 0     # re-home every N finished machine moves (0 = off). With the base
+                                      # limit switch, drift is bounded, so periodic homing beats per-move.
     log_level: str = "INFO"
 
 

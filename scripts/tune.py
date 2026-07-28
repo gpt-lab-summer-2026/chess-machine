@@ -24,8 +24,9 @@ The math (per axis, from >=2 touches at different targets): fit the landings to
 then the values that make landed == commanded are
     ASPD_new = ASPD_cur / m       AHOME_new = c + AHOME_cur * m
     RSPM_new = RSPM_cur / m_rail
-A single touch falls back to scale-only (holds the offset — fine for the rail, and
-for the base once a theta=0 endstop makes AHOME moot).
+A single touch falls back to scale-only (holds the offset — fine for the rail; the
+base's a8 limit switch makes HOME repeatable but recovers the SAME centerline zero,
+so AHOME still applies — give the base a 2nd angle to solve the offset).
 
     python scripts/tune.py --config config/config.yaml
     python scripts/tune.py --mock          # dry run, no hardware
@@ -37,6 +38,7 @@ REPL:
     apply         push the suggested calibration to the firmware, re-home, new round
     cal           print the firmware's current live calibration
     obs / reset   list / clear the accumulated touches
+    seek          measure the base limit-switch offset -> A_ENDSTOP_STEPS (home first)
     save [path]   write the current calibration as a firmware paste-block
     home | status | estop | quit
 """
@@ -135,8 +137,8 @@ class Calibrator:
         self.ctl.connect()
         self.cur = self.ctl.get_cal()
         print("Firmware calibration:", self._fmt_cal(self.cur))
-        print("Assuming all steppers are AT HOME (0). Park them there before touching;"
-              " use 'home' only to re-zero by hand.")
+        print("Assuming steppers are AT HOME (0). The base self-homes to its a8 switch on"
+              " `home`; park the winch (up) + cart (inner stop) before touching.")
 
     def close(self) -> None:
         try:
@@ -243,7 +245,7 @@ class Calibrator:
     @staticmethod
     def _fmt_cal(c: dict) -> str:
         return (f"ASPD={c.get('aspd', float('nan')):.3f}  AHOME={c.get('ahome', float('nan')):+.3f}  "
-                f"RSPM={c.get('rspm', float('nan')):.3f}")
+                f"RSPM={c.get('rspm', float('nan')):.3f}  AEND={int(c.get('aend', 0) or 0)}")
 
     def save_block(self, path: str | None) -> None:
         c = self.cur
@@ -253,6 +255,8 @@ class Calibrator:
             f"const float A_HOME_DEG = {c['ahome']:.3f}f;\n"
             f"const float         R_STEPS_PER_MM  = {c['rspm']:.3f}f;\n"
         )
+        if c.get("aend"):   # base limit-switch offset, once measured with `seek`
+            block += f"const long          A_ENDSTOP_STEPS = {int(round(c['aend']))};\n"
         print("\n" + block)
         if path:
             pathlib.Path(path).write_text(block)
@@ -268,11 +272,11 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_config(args.config) if args.config else Config()
-    if args.mock:
-        cfg.motion.backend = "mock"
+    # Bench tool: drive the raw serial transport (or mock), never the stepmap backend.
+    cfg.motion.backend = "mock" if args.mock else "serial"
     cal = Calibrator(cfg, args.r_min)
     cal.connect()
-    print("Commands: t <sq> | auto | fit | apply | cal | obs | reset | save | home | status | quit")
+    print("Commands: t <sq> | auto | fit | apply | cal | obs | reset | seek | save | home | status | quit")
 
     try:
         for line in _prompt_lines():
@@ -304,6 +308,11 @@ def main() -> int:
                         print("   (none)")
                 elif c == "reset":
                     cal.obs.clear(); print("   cleared.")
+                elif c in ("seek", "findsw"):
+                    off = cal.ctl.seek_base_switch()
+                    cal.cur = cal.ctl.get_cal()
+                    print(f"   base switch at {off} steps -> A_ENDSTOP_STEPS={off} "
+                          "(live-enabled; bake into the .ino & reflash to persist).")
                 elif c == "save":
                     cal.save_block(arg)
                 elif c in ("home", "zero"):

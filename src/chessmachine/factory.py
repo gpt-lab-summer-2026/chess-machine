@@ -13,6 +13,9 @@ def create_motion_controller(cfg: MotionConfig) -> MotionController:
     if cfg.backend == "serial":
         from .motion.serial_esp32 import SerialMotion
         return SerialMotion(cfg.serial)
+    if cfg.backend == "stepmap":
+        from .motion.stepmap import StepMapMotion
+        return StepMapMotion(cfg)
     if cfg.backend == "relay":
         return RelayMotion(cfg.relay)
     raise ValueError(f"Unknown motion backend: {cfg.backend!r}")

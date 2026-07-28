@@ -21,8 +21,9 @@ class MockMotion(MotionController):
         self.magnet_on = False
         self.connected = False
         self.homed = False
-        self._cal = {"aspd": 43.284, "ahome": 1.063, "rspm": 66.8}
+        self._cal = {"aspd": 43.284, "ahome": 1.063, "rspm": 66.8, "aend": 0}
         self._steps = {"a": 0, "r": 0, "w": 0}
+        self._base_switch = False   # base limit switch (ENDA) pressed?
 
     def connect(self) -> None:
         self.connected = True
@@ -60,6 +61,7 @@ class MockMotion(MotionController):
         return {
             "x": self.x, "z": self.z, "height": self.height,
             "magnet": self.magnet_on, "homed": self.homed,
+            "endstop_a": self._base_switch,
         }
 
     def estop(self) -> None:
@@ -94,6 +96,28 @@ class MockMotion(MotionController):
 
     def get_steps(self) -> dict:
         return dict(self._steps)
+
+    def goto_steps(self, base: int | None = None, rail: int | None = None,
+                   winch: int | None = None) -> None:
+        if base is not None:
+            self._steps["a"] = int(base)
+        if rail is not None:
+            self._steps["r"] = int(rail)
+        if winch is not None:
+            self._steps["w"] = int(winch)
+        self.ops.append(("goto_steps", int(base) if base is not None else None,
+                         int(rail) if rail is not None else None,
+                         int(winch) if winch is not None else None))
+        log.debug("mock: goto_steps a=%s r=%s w=%s", base, rail, winch)
+
+    def seek_base_switch(self) -> int:
+        """Pretend to seek the base limit switch: return a plausible a8 offset
+        (~+32 deg * aspd) and live-enable switch homing, matching the firmware."""
+        off = round(32.0 * self._cal.get("aspd", 43.284))
+        self._cal["aend"] = off
+        self.ops.append(("seek_base_switch", off))
+        log.debug("mock: seek_base_switch -> %d", off)
+        return off
 
     # -- test helpers -------------------------------------------------------- #
     def moves(self) -> list[tuple]:

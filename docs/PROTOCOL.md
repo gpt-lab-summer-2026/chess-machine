@@ -13,11 +13,16 @@ Implemented by [`firmware/esp32_chess`](../firmware/esp32_chess/) (device) and
 | Command | Reply | Meaning |
 |---|---|---|
 | `PING` | `OK PONG` | liveness check (used on connect) |
-| `HOME` | `OK HOMED` | home the radial, rotary, and pulley axes against their endstops |
+| `HOME` | `OK HOMED` | home all axes: the **base seeks its limit switch** (a8 side, absolute) then returns to the centerline zero; the sensorless winch + cart count back to 0 |
 | `MOVE R<mm> A<deg> [F<mm/min>]` | `OK` | move to radius `R` (mm from the pivot) and angle `A` (deg); `F` optional radial feedrate |
+| `GOTO [A<steps>][R<steps>][W<steps>]` | `OK` | absolute step-count move (stepmap backend): drive each given axis to an absolute half-step count (boot-home = 0, the `STEPS` space) |
 | `PULLEY H<mm> [F<mm/min>]` | `OK` | set magnet height above the board |
 | `MAG ON` / `MAG OFF` | `OK` | energize / release the electromagnet |
-| `STATUS` | `OK R<f> A<f> H<f> MAG<0\|1> ENDR<0\|1> ENDA<0\|1>` | current state |
+| `STATUS` | `OK R<f> A<f> H<f> MAG<0\|1> ENDR<0\|1> ENDA<0\|1>` | current state; `ENDA` = base limit switch (1 = pressed, at a8) |
+| `STEPS` | `OK STEPS A<n> R<n> W<n>` | raw physical step counts from boot-home (base, rail, winch) — position for step-space calibration |
+| `CAL [ASPD v][AHOME v][RSPM v][AEND v]` | `OK CAL ASPD.. AHOME.. RSPM.. AEND..` | read/set live calibration (base steps/deg, base home offset, rail steps/mm, base switch offset); RAM only |
+| `JOG [R<n>][A<n>][W<n>]` | `OK` | raw signed-half-step jog of any axis (bench calibration); updates step counters, not mm/deg |
+| `SEEK` | `OK SEEK AEND<n>` | base only: rotate to the limit switch and report its step offset (= `A_ENDSTOP_STEPS`); `HOME` first |
 | `ESTOP` | `OK ESTOP` | disable motors + magnet; cleared by `HOME` |
 
 The host computes `R`/`A` from a planar board coordinate (`R = hypot(x,z)`,

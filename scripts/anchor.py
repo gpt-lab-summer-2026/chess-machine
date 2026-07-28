@@ -16,7 +16,11 @@ needs fewer winch steps to touch. Jog the winch down to touch at each corner and
 it's baked into the map like base/rail.
 
 Workflow:
-  1. `home`             establish step 0 on all axes (start with the head AT home)
+  1. `home`             establish step 0 on all axes. The BASE self-homes to its a8
+                        limit switch (no hand-placing); the WINCH + CART are still
+                        sensorless, so start THEM at home (winch up, cart at the inner
+                        stop). One-time: run `seek` to measure the switch offset and
+                        bake it into A_ENDSTOP_STEPS (see below).
   2. jog to a corner:   `a <steps>` (base), `r <steps>` (rail)
   3. `w <steps>`        jog the winch DOWN until the magnet just touches the square
                         (`mag on` to feel it grab); the winch count is its depth
@@ -35,6 +39,7 @@ Commands:
   anchors         list captured anchors          del <sq>   remove one
   map             interpolate all squares; print deltas, sag, residuals
   goto <sq>       drive to <sq>'s interpolated base/rail (verify)
+  seek            measure the base limit-switch offset -> A_ENDSTOP_STEPS (HOME first)
   mag on|off      electromagnet
   home | pos | save [path] | estop | quit
 
@@ -86,7 +91,8 @@ class StepMap:
     def connect(self) -> None:
         print(f"Connecting ({self.cfg.motion.backend}) ...", flush=True)
         self.ctl.connect()
-        print("Ready. Start with the head at HOME, then `home` to zero the counters.")
+        print("Ready. The base self-homes to its a8 limit switch; start the winch (up) "
+              "and cart (inner stop) at home, then `home` to zero the counters.")
 
     def close(self) -> None:
         try:
@@ -205,12 +211,12 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = load_config(args.config) if args.config else Config()
-    if args.mock:
-        cfg.motion.backend = "mock"
+    # Bench tool: drive the raw serial transport (or mock), never the stepmap backend.
+    cfg.motion.backend = "mock" if args.mock else "serial"
     m = StepMap(cfg)
     m.connect()
     print("Commands: a/r/w <n> | wtop | pos | set <sq> | anchors | del <sq> | map "
-          "| goto <sq> | mag on|off | home | save | quit")
+          "| goto <sq> | seek | mag on|off | home | save | quit")
 
     try:
         for line in _prompt():
@@ -241,6 +247,10 @@ def main() -> int:
                     m.report()
                 elif c == "goto" and arg:
                     m.goto(arg)
+                elif c in ("seek", "findsw"):
+                    off = m.ctl.seek_base_switch()
+                    print(f"   base limit switch at {off} steps from home -> bake "
+                          f"A_ENDSTOP_STEPS={off} into the .ino (switch homing live-enabled now).")
                 elif c in ("mag", "m") and arg:
                     on = arg.lower() in ("on", "1", "true")
                     m.ctl.magnet(on); print(f"   magnet {'ON' if on else 'OFF'}")

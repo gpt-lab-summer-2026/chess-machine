@@ -20,12 +20,14 @@
  *   PING                          -> OK PONG
  *   HOME                          -> OK HOMED
  *   MOVE R<mm> A<deg> [F<mm/min>] -> OK
+ *   GOTO [A<steps>][R<steps>][W<steps>] -> OK  (absolute step-count move; stepmap backend)
  *   PULLEY H<mm> [F<mm/min>]      -> OK
  *   MAG ON|OFF                    -> OK
  *   STATUS                        -> OK R<f> A<f> H<f> MAG<0|1> ENDR<0|1> ENDA<0|1>
  *   ESTOP                         -> OK ESTOP
- *   CAL [ASPD v][AHOME v][RSPM v] -> OK CAL ...   (live calibration, no reflash)
+ *   CAL [ASPD v][AHOME v][RSPM v][AEND v] -> OK CAL ...  (live calibration, no reflash)
  *   JOG [R<steps>][A<steps>]      -> OK           (raw stepper jog, for calibration)
+ *   SEEK                          -> OK SEEK AEND<n>  (base: find its limit switch, report the offset)
  *
  * The host does the Cartesian->polar conversion, so this firmware only positions
  * the radial axis (mm) and the rotary axis (degrees). Every motion command BLOCKS
@@ -33,10 +35,12 @@
  * control, so the feed `F` is accepted and IGNORED. Only ONE motor is driven at a
  * time (see AXIS_STAGGER_MS). Lines starting with '#' are debug.
  *
- * All three axes are step-counted from a boot-home of 0, so BOOT MUST START WITH:
- * base at its home bearing, winch at travel/top, and the cart at 0 (nearest the
- * tower). HOME just steps each axis back to 0 by count (no sensors, no slamming).
- * The soft limits (R_MIN/R_MAX, A_MIN/A_MAX) keep every move off the physical ends.
+ * The axes are step-counted from a boot-home of 0. The BASE now has a real limit
+ * switch (a8 side, backed by a hard stop) it homes against, so it need NOT be
+ * hand-placed at boot — set A_ENDSTOP_STEPS to enable it. The winch + cart are still
+ * sensorless, so BOOT MUST START WITH the winch at travel/top and the cart at 0
+ * (nearest the tower); HOME steps those back to 0 by count. The soft limits
+ * (R_MIN/R_MAX, A_MIN/A_MAX) and the base switch keep every move off the physical ends.
  *
  * Board: any ESP32 dev module. No external libraries. EDIT the pin + calibration
  * section for your wiring / measurements.
@@ -63,6 +67,7 @@
 #define P_IN3 18
 #define P_IN4 17
 #define MAGNET_PIN 19  // relay "1" for the electromagnet     [single relay]
+#define A_ENDSTOP_PIN 16  // base limit switch -> GND (INPUT_PULLUP). Active (a8 / hard stop) = LOW.
 
 
 // ================ EDIT: magnet relay =========================================
@@ -101,14 +106,32 @@ const unsigned long A_STEP_DELAY_MS = 4;  // ms per half-step. HIGHER = slower =
 // steps to gear slack before the output moves. baseStep() adds them back on a
 // reversal so the tracked position stays exact (see g_aDir). ~100 measured.
 const long A_BACKLASH_STEPS = 100;
+// -- base limit switch: absolute zero reference (a8 side + hard stop) ---------
+// A normally-open switch from A_ENDSTOP_PIN to GND (INPUT_PULLUP -> pressed = LOW).
+// It sits where the base is aligned to a8, with a HARD STOP just past it — the base
+// may never rotate beyond. HOME rotates toward it, then derives the (unchanged)
+// centerline zero from A_ENDSTOP_STEPS, so the base self-homes (no hand-placing) and
+// open-loop drift can't accumulate across games. The rail + winch have no switch.
+const bool A_ENDSTOP_ACTIVE_LOW = true;   // switch to GND + internal pull-up: pressed = LOW
+const int  A_HOME_DIR = +1;               // step sign that rotates TOWARD the switch (+theta = a8
+                                          // side; see winch_offset note). Flip if HOME runs AWAY.
+const long A_HOME_MAX_STEPS = 6000;       // seek travel cap (~full sweep + margin) before giving up
+const long A_HOME_BACKOFF_STEPS = 200;    // release + slow re-approach for a repeatable trigger edge
+// OUTPUT step count from the centerline zero (0) out to the switch. a8 is ~+32 deg,
+// so ~ +32 * A_STEPS_PER_DEG (~+1385). 0 DISABLES switch-homing (count-home fallback,
+// as before). MEASURE it once: power on at centerline, HOME, then run `SEEK` (or the
+// anchor/tune `seek` command) — it reports the number. Bake it here + reflash; also
+// settable live via `CAL AEND <n>`.
+const long A_ENDSTOP_STEPS = 956;           // 0 until measured (keeps the old count-home behavior)
 
 // ================ EDIT: soft limits & homing =================================
 // R is the CART's radial position from the pivot. The INNER stop is home (= r_min);
 // boot MUST start with the cart there. a1 sits at the FAR hard stop (r_max).
 const float R_MIN_MM = 117.5f;   // cart R at the INNER mechanical stop (= home = step 0)
 const float R_MAX_MM = 387.0f;   // cart R at the FAR stop (= a1). Soft clamp = the physical stop.
-const float A_MIN_DEG = -55.0f;  // reachable sweep
-const float A_MAX_DEG = 55.0f;
+const float A_MIN_DEG = -55.0f;  // reachable sweep (h1 side)
+const float A_MAX_DEG = 55.0f;   // a8 side is ALSO bounded by the limit switch / hard stop
+                                 // (the runtime guard stops any move that reaches it).
 const float R_HOME_MM = 117.5f;   // PARK pose = cart fully in against the inner stop (= r_min)
 const float A_HOME_DEG = 1.063f;  // pivot-frame angle of the PARK/boot bearing (base zero offset).
                                   // Re-zero to 0.0 if you re-align home by hand.
@@ -170,6 +193,7 @@ long g_rStepCount = 0;    // NET physical half-steps from boot (inner home = 0)
 float g_aStepsPerDeg = A_STEPS_PER_DEG;  // base steps/deg (scale)
 float g_aHomeDeg = A_HOME_DEG;           // base home/zero offset (deg)
 float g_rStepsPerMm = R_STEPS_PER_MM;    // rail steps/mm (scale)
+long  g_aEndstopSteps = A_ENDSTOP_STEPS; // base switch offset from centerline 0 (0 = disabled)
 
 char g_line[96];     // line currently being assembled
 char g_argline[96];  // clean copy of the last full line, for arg parsing
@@ -277,16 +301,48 @@ void baseRelease() {  // de-energize all base coils
   digitalWrite(A_IN3, LOW);
   digitalWrite(A_IN4, LOW);
 }
+// --- base limit switch (a8 side / hard stop) = absolute zero reference --------
+bool baseSwitchPressed() {
+  return digitalRead(A_ENDSTOP_PIN) == (A_ENDSTOP_ACTIVE_LOW ? LOW : HIGH);
+}
+// One raw half-step toward `dir` (+1/-1). No position/backlash bookkeeping — used
+// only by the switch seek, which cares about the physical edge, not the count.
+void baseStepOnce(int dir) {
+  g_aStepPhase = (g_aStepPhase + dir + 8) & 7;
+  baseWritePhase(g_aStepPhase);
+  delay(A_STEP_DELAY_MS);
+}
+// Rotate toward the switch until it triggers, stopping the instant it does (never
+// slams the hard stop). Two-pass: release if already on it, fast approach, back off,
+// slow re-approach for a repeatable edge. Leaves the base AT the switch; returns
+// false if it isn't found within A_HOME_MAX_STEPS (broken / miswired / wrong dir).
+bool baseSeekSwitch() {
+  long i;
+  if (baseSwitchPressed()) {                                        // already on it: release first
+    for (i = 0; baseSwitchPressed() && i < A_HOME_MAX_STEPS; i++) baseStepOnce(-A_HOME_DIR);
+    for (i = 0; i < A_HOME_BACKOFF_STEPS; i++) baseStepOnce(-A_HOME_DIR);
+  }
+  for (i = 0; !baseSwitchPressed() && i < A_HOME_MAX_STEPS; i++) baseStepOnce(A_HOME_DIR);
+  if (!baseSwitchPressed()) return false;                           // never reached it
+  for (i = 0; i < A_HOME_BACKOFF_STEPS; i++) baseStepOnce(-A_HOME_DIR);            // back off
+  for (i = 0; !baseSwitchPressed() && i < A_HOME_BACKOFF_STEPS * 4; i++) baseStepOnce(A_HOME_DIR);
+  return baseSwitchPressed();
+}
 // Turn the base motor `motorSteps` half-steps (signed). Raw — no position/backlash
-// bookkeeping; used by baseStep() which owns that.
-void baseStepMotor(long motorSteps) {
+// bookkeeping; used by baseStep() which owns that. Returns false (move TRUNCATED)
+// if it would drive PAST the switch: once the offset is calibrated, the a8 hard stop
+// is never ground into. Only guards toward the switch, so leaving home is unimpeded.
+bool baseStepMotor(long motorSteps) {
   int dir = (motorSteps >= 0) ? 1 : -1;
   long n = labs(motorSteps);
+  bool guard = (g_aEndstopSteps != 0);   // only once the switch offset is calibrated
   for (long i = 0; i < n; i++) {
+    if (guard && dir == A_HOME_DIR && baseSwitchPressed()) return false;  // at the hard limit
     g_aStepPhase = (g_aStepPhase + dir + 8) & 7;
     baseWritePhase(g_aStepPhase);
     delay(A_STEP_DELAY_MS);
   }
+  return true;
 }
 // Move the base OUTPUT by `steps` half-steps (signed), compensating gearbox
 // backlash: on a direction reversal the motor first turns A_BACKLASH_STEPS extra
@@ -297,7 +353,12 @@ void baseStep(long steps) {
   if (steps == 0) return;
   int dir = (steps > 0) ? 1 : -1;
   long comp = (g_aDir != 0 && dir != g_aDir) ? A_BACKLASH_STEPS : 0;  // reversal -> re-engage gears
-  baseStepMotor(steps + dir * comp);
+  if (!baseStepMotor(steps + dir * comp)) {   // hit the switch: we ARE at the a8 reference
+    g_aStepCount = g_aEndstopSteps;           // snap the OUTPUT position to the known offset
+    g_aDir = A_HOME_DIR;
+    Serial.println("# base limit switch reached; position re-zeroed to the a8 reference");
+    return;
+  }
   g_aStepCount += steps;   // output advanced by exactly `steps` (comp didn't move it)
   g_aDir = dir;
 }
@@ -311,8 +372,19 @@ void baseMoveTo(float adeg) {
   g_curA = adeg;
 }
 void baseHome() {
-  baseStep(-g_aStepCount);  // undo every net step since boot -> physical 0
-  g_curA = g_aHomeDeg;      // step 0 IS board angle g_aHomeDeg
+  // With the switch calibrated (A_ENDSTOP_STEPS != 0): rotate to it, adopt its known
+  // OUTPUT offset, then drive back to the centerline zero (output 0) — an ABSOLUTE
+  // home that survives power cycles + open-loop drift, no hand-placing. Without it:
+  // fall back to the sensorless count-back-to-0 (which needs a hand-placed boot home).
+  if (g_aEndstopSteps != 0 && baseSeekSwitch()) {
+    g_aStepCount = g_aEndstopSteps;   // physically at the switch = this many steps out
+    g_aDir = A_HOME_DIR;              // gears last engaged toward the switch
+    baseStep(-g_aStepCount);          // return to the centerline zero (output 0)
+  } else {
+    if (g_aEndstopSteps != 0) Serial.println("# WARN base switch not found; count-homing instead");
+    baseStep(-g_aStepCount);          // sensorless: undo every net step since boot -> 0
+  }
+  g_curA = g_aHomeDeg;                // step 0 IS board angle g_aHomeDeg
 }
 
 // ----------------------------- rail (stepper) --------------------------------
@@ -367,9 +439,10 @@ void railHome() {
 }
 
 // ----------------------------- homing ----------------------------------------
-// No sensors: every axis is step-counted from its boot-home (0), so HOME just
-// steps each back to 0. Boot MUST start at home on all three (base bearing, winch
-// up, cart at the inner stop). Base first, winch to travel, then the cart in.
+// The BASE homes against its limit switch (absolute, no hand-placing) once the
+// switch offset is calibrated; the winch + cart are sensorless and count back to 0,
+// so boot MUST start them at home (winch up, cart at the inner stop). Base first,
+// winch to travel, then the cart in.
 void doHome() {
   g_estopped = false;
   char buf[96];
@@ -400,7 +473,7 @@ void doMoveRA(float rmm, float adeg) {
 void doStatus() {
   char buf[80];
   snprintf(buf, sizeof(buf), "R%.2f A%.2f H%.2f MAG%d ENDR%d ENDA%d",
-           g_curR, g_curA, g_curH, g_magnetOn ? 1 : 0, 0, 0);  // no endstops (all steppers)
+           g_curR, g_curA, g_curH, g_magnetOn ? 1 : 0, 0, baseSwitchPressed() ? 1 : 0);  // ENDA = base switch
   replyOK(buf);
 }
 
@@ -414,10 +487,11 @@ void doEstop() {
   replyOK("ESTOP");
 }
 
-// Runtime calibration set/report: "CAL [ASPD v] [AHOME v] [RSPM v]". No args just
-// reports. Lets scripts/tune.py tune the base scale/offset and rail steps/mm live,
-// without a reflash. ASPD = base steps/deg, AHOME = base home offset (deg),
-// RSPM = rail steps/mm. RAM only — bake into the #defines to keep across a reboot.
+// Runtime calibration set/report: "CAL [ASPD v] [AHOME v] [RSPM v] [AEND v]". No
+// args just reports. Lets scripts/tune.py tune the base scale/offset + rail steps/mm
+// live, without a reflash. ASPD = base steps/deg, AHOME = base home offset (deg),
+// RSPM = rail steps/mm, AEND = base limit-switch offset in steps (0 disables switch
+// homing). RAM only — bake into the #defines to keep across a reboot.
 void doCal() {
   char tmp[96];
   strncpy(tmp, g_argline, sizeof(tmp));
@@ -430,10 +504,36 @@ void doCal() {
     if (!strcmp(key, "ASPD")) g_aStepsPerDeg = v;
     else if (!strcmp(key, "AHOME")) g_aHomeDeg = v;
     else if (!strcmp(key, "RSPM")) g_rStepsPerMm = v;
+    else if (!strcmp(key, "AEND")) g_aEndstopSteps = (long)v;  // base switch offset (0 disables)
   }
   char buf[96];
-  snprintf(buf, sizeof(buf), "CAL ASPD%.4f AHOME%.4f RSPM%.4f",
-           g_aStepsPerDeg, g_aHomeDeg, g_rStepsPerMm);
+  snprintf(buf, sizeof(buf), "CAL ASPD%.4f AHOME%.4f RSPM%.4f AEND%ld",
+           g_aStepsPerDeg, g_aHomeDeg, g_rStepsPerMm, g_aEndstopSteps);
+  replyOK(buf);
+}
+
+// Bench-measure the base limit-switch offset. Requires a TRUSTED zero first (power
+// on with the base at the centerline home, then HOME). Steps toward the switch,
+// tracking the OUTPUT count, so g_aStepCount at the trigger = A_ENDSTOP_STEPS. Drops
+// the guard during the seek, live-enables switch homing on success, and returns to
+// the start either way. Bake the reported number into A_ENDSTOP_STEPS to persist.
+void doSeekSwitch() {
+  long start = g_aStepCount;
+  long saved = g_aEndstopSteps;
+  g_aEndstopSteps = 0;                 // drop the guard so we can drive onto the switch
+  long i;
+  for (i = 0; !baseSwitchPressed() && i < A_HOME_MAX_STEPS; i++) baseStep((long)A_HOME_DIR);
+  bool found = baseSwitchPressed();
+  long off = g_aStepCount - start;     // OUTPUT steps from the (trusted) zero to the switch
+  g_aEndstopSteps = found ? off : saved;
+  baseStep(start - g_aStepCount);      // return to where we started
+  if (!found) { replyErr("SEEK: switch not found (check wiring / A_HOME_DIR sign)"); return; }
+  char note[100];
+  snprintf(note, sizeof(note),
+           "# SEEK: base switch at %ld steps; bake A_ENDSTOP_STEPS=%ld & reflash to persist", off, off);
+  Serial.println(note);
+  char buf[48];
+  snprintf(buf, sizeof(buf), "SEEK AEND%ld", off);
   replyOK(buf);
 }
 
@@ -468,6 +568,20 @@ void handleLine(char* line) {
     argKeyed('A', &a);  // F is accepted but ignored
     doMoveRA(r, a);
     replyOK();
+  } else if (!strcmp(cmd, "GOTO")) {
+    // ABSOLUTE step-count move (the stepmap backend's primitive): drive the given
+    // axes to an absolute half-step count (boot-home = 0), one at a time — base,
+    // rail, then winch — matching the STEPS/anchor step space exactly. Base goes
+    // through backlash comp + the switch guard; its coils release after (the gearbox
+    // holds the angle) so the rail gets the full supply. No settle here: the caller
+    // (lower/raise via a separate GOTO W) controls dwell.
+    float v;
+    bool headMoved = false;
+    if (argKeyed('A', &v)) { baseStep((long)v - g_aStepCount); baseRelease(); headMoved = true; }
+    if (argKeyed('R', &v)) { if (headMoved) delay(AXIS_STAGGER_MS); railStep((long)v - g_rStepCount); headMoved = true; }
+    if (argKeyed('W', &v)) { if (headMoved) delay(AXIS_STAGGER_MS); winchStep((long)v - g_wStepCount, WINCH_STEP_DELAY_MS); }
+    if (headMoved) delay(WINCH_SETTLE_MS);  // let the hanging magnet stop swinging before a lower
+    replyOK();
   } else if (!strcmp(cmd, "JOG")) {
     // Bench calibration, RAW stepper jog: "JOG R<steps>" (rail), "JOG A<steps>"
     // (base), "JOG W<steps>" (winch). Signed half-steps, applied WITHOUT the
@@ -479,6 +593,8 @@ void handleLine(char* line) {
     if (argKeyed('A', &v)) baseStep((long)v);
     if (argKeyed('W', &v)) winchStep((long)v, WINCH_STEP_DELAY_MS);
     replyOK();
+  } else if (!strcmp(cmd, "SEEK")) {
+    doSeekSwitch();  // base: find the limit switch, report/measure A_ENDSTOP_STEPS
   } else if (!strcmp(cmd, "PULLEY")) {
     float h = g_curH;
     argKeyed('H', &h);  // F ignored
@@ -540,6 +656,7 @@ void setup() {
   pinMode(A_IN2, OUTPUT);  // base stepper
   pinMode(A_IN3, OUTPUT);
   pinMode(A_IN4, OUTPUT);
+  pinMode(A_ENDSTOP_PIN, INPUT_PULLUP);  // base limit switch to GND (a8 / hard stop)
 
   railRelease();   // rail coils off
   winchRelease();  // winch coils off

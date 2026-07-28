@@ -151,8 +151,41 @@ class SerialMotion(MotionController):
         steps = int(steps)
         self._command(f"JOG W{steps}", timeout=abs(steps) * 0.01 + 3.0)
 
+    def goto_steps(self, base: int | None = None, rail: int | None = None,
+                   winch: int | None = None) -> None:
+        """Absolute step-count move (`GOTO`): drive each named axis to an absolute
+        half-step count (boot-home = 0), the space `STEPS` reports. The stepmap
+        backend's primitive — no geometry, no mm/deg. Blocks until the move finishes."""
+        parts = []
+        if base is not None:
+            parts.append(f"A{int(base)}")
+        if rail is not None:
+            parts.append(f"R{int(rail)}")
+        if winch is not None:
+            parts.append(f"W{int(winch)}")
+        if not parts:
+            return
+        # An absolute move can traverse the full range (base + rail); allow the same
+        # headroom as homing rather than the short per-command timeout.
+        self._command("GOTO " + " ".join(parts), timeout=self.cfg.home_timeout_s)
+
+    def seek_base_switch(self) -> int:
+        """Bench-measure the base limit-switch offset (`SEEK`): rotate to the switch
+        and read its OUTPUT step count from the trusted zero. HOME the base first so
+        the count starts at 0. Returns the offset to bake into A_ENDSTOP_STEPS and
+        live-enables switch homing on the firmware for this session. Blocks; returns
+        to the start pose afterwards."""
+        payload = self._command("SEEK", timeout=self.cfg.home_timeout_s)
+        for tok in payload.split():
+            if tok.startswith("AEND"):
+                try:
+                    return int(tok[4:])
+                except ValueError:
+                    break
+        raise RuntimeError(f"SEEK: no AEND offset in reply {payload!r}")
+
     # -- live calibration (CAL) --------------------------------------------- #
-    _CAL_KEYS = {"aspd": "ASPD", "ahome": "AHOME", "rspm": "RSPM"}
+    _CAL_KEYS = {"aspd": "ASPD", "ahome": "AHOME", "rspm": "RSPM", "aend": "AEND"}
 
     def get_cal(self) -> dict:
         """Read the firmware's current calibration (base steps/deg + home offset,
