@@ -25,9 +25,10 @@ class NLU(ABC):
     def phrase_analysis(self, question: str, facts: PositionFacts) -> str:
         """Phrase a spoken answer to a position question, grounded in `facts`."""
 
-    def warmup(self) -> None:
+    def warmup(self, context: dict | None = None) -> None:
         """Optional: pre-load / initialize the model so the first real call isn't
-        cold. No-op by default (rule-based needs no warm-up)."""
+        cold. `context` lets the warm-up match the real prompt prefix. No-op by
+        default (rule-based needs no warm-up)."""
         return None
 
     def small_talk(self, transcript: str, context: dict) -> str:

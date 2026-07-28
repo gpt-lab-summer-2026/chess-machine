@@ -79,10 +79,11 @@ class ChessMachine:
         self.choreo.connect()
         if home:
             self.choreo.home()
-        # Pay the SLM cold-start now (model load / first slot launch), so the
-        # user's FIRST move doesn't race a still-loading server and time out.
+        # Pay the SLM cold-start now (model load + prompt-prefix cache + grammar),
+        # so the user's FIRST move doesn't race a cold server and time out. Passing
+        # the live context makes the warm-up's cached prefix match the real one.
         log.info("Warming up the language model...")
-        self.nlu.warmup()
+        self.nlu.warmup(self._context())
         self._say(f"Chess machine ready. I'm playing "
                   f"{GameState.color_name(self.machine_color)} at {self.difficulty} difficulty.")
         if self.cfg.app.auto_reply and self.game.is_machine_turn() and not self.game.is_game_over():

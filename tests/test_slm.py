@@ -175,7 +175,7 @@ def test_intent_actions_schema_wraps_per_action_schema():
     assert INTENT_ACTIONS_SCHEMA["required"] == ["actions"]
 
 
-def test_chat_server_sends_json_schema_and_disables_cache(monkeypatch):
+def test_chat_server_sends_json_schema_and_enables_cache_prompt(monkeypatch):
     captured = {}
 
     def fake_urlopen(req, timeout=None):
@@ -188,7 +188,7 @@ def test_chat_server_sends_json_schema_and_disables_cache(monkeypatch):
                 schema=INTENT_ACTIONS_SCHEMA)
 
     assert captured["body"]["response_format"]["type"] == "json_schema"
-    assert captured["body"]["cache_prompt"] is False
+    assert captured["body"]["cache_prompt"] is True   # prefix-cache on (speeds real moves)
 
 
 def test_chat_server_falls_back_to_json_object_on_400(monkeypatch):
@@ -211,21 +211,28 @@ def test_chat_server_falls_back_to_json_object_on_400(monkeypatch):
 
 
 # -- warmup (absorbs SLM cold-start at startup) ------------------------------ #
-def test_warmup_uses_long_timeout_and_swallows_errors():
+def test_warmup_warms_the_real_intent_path_with_long_timeout():
     import types
     seen = {}
 
     class WarmFake:
         cfg = types.SimpleNamespace(warmup_timeout_s=123.0)
 
-        def chat(self, messages, temperature=None, max_tokens=None, timeout=None, **kw):
-            seen["timeout"] = timeout
-            seen["max_tokens"] = max_tokens
-            return "ok"
+        def chat(self, messages, json_mode=False, temperature=None, max_tokens=None,
+                 schema=None, timeout=None):
+            seen.update(timeout=timeout, schema=schema, json_mode=json_mode, messages=messages)
+            return '{"actions": []}'
 
-    SlmNLU(WarmFake(), RuleBasedNLU()).warmup()
-    assert seen["timeout"] == 123.0          # cold-load-tolerant timeout, not the 30 s default
-    assert seen["max_tokens"] == 1           # a tiny generation, just to launch the slot
+    SlmNLU(WarmFake(), RuleBasedNLU()).warmup(
+        {"machine_color": "black", "turn": "white", "difficulty": "medium"})
+    assert seen["timeout"] == 123.0                     # cold-load-tolerant, not the 30 s default
+    # Warms the SAME path a real move takes — a bare "hello" wouldn't:
+    assert seen["json_mode"] is True and seen["schema"] is not None
+    assert len(seen["messages"]) > 2   # full prompt + few-shots, not a bare line
+
+
+def test_warmup_is_non_fatal_when_server_down():
+    import types
 
     class Boom:
         cfg = types.SimpleNamespace(warmup_timeout_s=1.0)
@@ -233,4 +240,4 @@ def test_warmup_uses_long_timeout_and_swallows_errors():
         def chat(self, *a, **k):
             raise RuntimeError("server down")
 
-    SlmNLU(Boom(), RuleBasedNLU()).warmup()  # must NOT raise (non-fatal at startup)
+    SlmNLU(Boom(), RuleBasedNLU()).warmup()             # must NOT raise (falls back at runtime)

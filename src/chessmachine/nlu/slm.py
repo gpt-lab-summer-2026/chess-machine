@@ -119,16 +119,26 @@ class SlmNLU(NLU):
         self.client = client
         self.fallback = fallback
 
-    def warmup(self) -> None:
-        """Pay the model's cold-start now (a tiny generation) so the first REAL
-        move doesn't race a still-loading server and time out. Uses a long
-        timeout to absorb model load on a cold Pi; failures are non-fatal (the
-        server may just be down, in which case we fall back to rule-based)."""
+    def warmup(self, context: dict | None = None) -> None:
+        """Warm the REAL intent path before the game starts, so the user's first
+        move doesn't race a cold server and time out.
+
+        A bare "hello" does NOT work: with cache_prompt on, real moves are fast
+        because the big system-prompt+few-shot PREFIX and the json_schema grammar
+        are already cached — and a trivial request warms none of those. So we run
+        an actual throwaway move ("e2e4") through the exact same chat call
+        `interpret` uses (same messages, schema, json_mode), which primes the
+        model, the prefix cache, and the grammar. Long timeout absorbs cold model
+        load on the Pi; failures are non-fatal (server down -> rule-based)."""
+        ctx = context or {"machine_color": "black", "turn": "white", "difficulty": "medium"}
         try:
-            self.client.chat([{"role": "user", "content": "ok"}],
-                             temperature=0.0, max_tokens=1,
-                             timeout=self.client.cfg.warmup_timeout_s)
-            log.info("SLM warmed up")
+            self.client.chat(
+                build_intent_messages("e2e4", ctx),
+                json_mode=True, temperature=0.0, max_tokens=96,
+                schema=INTENT_ACTIONS_SCHEMA,
+                timeout=self.client.cfg.warmup_timeout_s,
+            )
+            log.info("SLM warmed up (real intent path)")
         except Exception as exc:  # noqa: BLE001 - warmup must never block startup
             log.info("SLM warmup skipped (%s); will use rule-based until it responds", exc)
 
