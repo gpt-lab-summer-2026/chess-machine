@@ -37,14 +37,26 @@ class AudioConfig:
     vad: VadConfig = field(default_factory=VadConfig)
 
 
+# Priming Whisper with chess vocabulary makes NATURAL speech ("knight to f3",
+# "e4", "castle") transcribe far more reliably at the mic's 8 kHz — the user does
+# NOT have to speak phonetically ("bravo four"). Kept short so it biases, not
+# dominates. Set stt.prompt: "" to disable.
+_CHESS_STT_PROMPT = (
+    "Chess moves and squares: e4, d5, Nf3, Bc4, Qxd5, O-O, castle kingside, "
+    "knight to f3, bishop takes e5, pawn e4, rook a1, queen d1, king e2, "
+    "files a b c d e f g h, ranks one to eight."
+)
+
+
 @dataclass
 class SttConfig:
-    backend: str = "distil_whisper"          # distil_whisper | stdin
+    backend: str = "distil_whisper"          # distil_whisper | esp32_whisper | stdin
     model: str = "distil-small.en"          # faster-whisper alias -> CTranslate2 build
     device: str = "cpu"                      # cpu | cuda | auto
     compute_type: str = "int8"               # int8 is fast on the Pi 5 CPU
     language: str = "en"
     beam_size: int = 1
+    prompt: str = _CHESS_STT_PROMPT          # bias Whisper toward chess vocab (no NATO needed)
 
 
 @dataclass
@@ -115,7 +127,8 @@ class EngineConfig:
 @dataclass
 class SerialConfig:
     port: str = "COM3"                # Windows: COMx ; Pi/Linux: /dev/ttyUSB0
-    baud: int = 115200
+    baud: int = 460800                # must match the firmware's Serial.begin — 460800
+                                      # carries the 8 kHz MAX4466 mic audio + commands
     timeout_s: float = 5.0
     connect_settle_s: float = 2.0     # ESP32 auto-resets when the port opens
     home_timeout_s: float = 120.0     # homing is slow: base seeks its switch (full sweep worst case)

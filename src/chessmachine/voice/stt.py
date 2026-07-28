@@ -34,16 +34,19 @@ class StdinSTT(STT):
 
 
 class DistilWhisperSTT(STT):
-    def __init__(self, cfg: SttConfig, audio_cfg: AudioConfig):
+    def __init__(self, cfg: SttConfig, audio_cfg: AudioConfig, capture=None):
         from faster_whisper import WhisperModel  # lazy: heavy dependency
-
-        from .audio import AudioCapture
 
         log.info("Loading distil-whisper model %s (%s/%s)...",
                  cfg.model, cfg.device, cfg.compute_type)
         self.cfg = cfg
         self.model = WhisperModel(cfg.model, device=cfg.device, compute_type=cfg.compute_type)
-        self.capture = AudioCapture(audio_cfg)
+        # `capture` is any object with record_utterance() -> 16 kHz float32. Default
+        # is the local sounddevice mic; the esp32 backend injects a serial capture.
+        if capture is None:
+            from .audio import AudioCapture
+            capture = AudioCapture(audio_cfg)
+        self.capture = capture
 
     def transcribe(self, samples) -> str:
         if samples is None or len(samples) == 0:
@@ -51,6 +54,7 @@ class DistilWhisperSTT(STT):
         segments, _info = self.model.transcribe(
             samples, language=self.cfg.language, beam_size=self.cfg.beam_size,
             vad_filter=True,   # drop non-speech regions -> fewer silence hallucinations
+            initial_prompt=self.cfg.prompt or None,   # bias toward chess vocabulary
         )
         return " ".join(seg.text.strip() for seg in segments).strip()
 
@@ -63,9 +67,17 @@ class DistilWhisperSTT(STT):
         return text
 
 
-def create_stt(stt_cfg: SttConfig, audio_cfg: AudioConfig) -> STT:
+def create_stt(stt_cfg: SttConfig, audio_cfg: AudioConfig, motion=None) -> STT:
     if stt_cfg.backend == "stdin":
         return StdinSTT()
     if stt_cfg.backend == "distil_whisper":
         return DistilWhisperSTT(stt_cfg, audio_cfg)
+    if stt_cfg.backend == "esp32_whisper":
+        # Same Whisper model, but the mic is the MAX4466 on the ESP32, streamed
+        # over the motion controller's serial link (shared, turn-based).
+        if motion is None:
+            raise ValueError("esp32_whisper STT needs the serial motion controller "
+                             "(set motion.backend: serial)")
+        from .esp32_mic import MotionMicCapture
+        return DistilWhisperSTT(stt_cfg, audio_cfg, capture=MotionMicCapture(motion))
     raise ValueError(f"Unknown stt backend: {stt_cfg.backend!r}")

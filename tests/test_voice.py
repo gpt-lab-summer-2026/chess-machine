@@ -14,7 +14,7 @@ from chessmachine.voice.tts import KokoroTTS
 
 def test_whisper_listen_echoes_transcript(capsys):
     stt = DistilWhisperSTT.__new__(DistilWhisperSTT)
-    stt.cfg = types.SimpleNamespace(language="en", beam_size=1)
+    stt.cfg = types.SimpleNamespace(language="en", beam_size=1, prompt="")
     stt.capture = types.SimpleNamespace(record_utterance=lambda: [0.1, 0.2])
     seg = types.SimpleNamespace(text=" e4 ")
     stt.model = types.SimpleNamespace(transcribe=lambda samples, **kw: ([seg], None))
@@ -24,7 +24,7 @@ def test_whisper_listen_echoes_transcript(capsys):
 
 def test_whisper_listen_silent_prints_nothing(capsys):
     stt = DistilWhisperSTT.__new__(DistilWhisperSTT)
-    stt.cfg = types.SimpleNamespace(language="en", beam_size=1)
+    stt.cfg = types.SimpleNamespace(language="en", beam_size=1, prompt="")
     stt.capture = types.SimpleNamespace(record_utterance=lambda: [])
     stt.model = types.SimpleNamespace(transcribe=lambda samples, **kw: ([], None))
     assert stt.listen() == ""

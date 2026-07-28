@@ -71,3 +71,9 @@ def test_travel_below_pick_height_rejected(tmp_path):
     )
     with pytest.raises(ValueError):
         load_config(p)
+
+
+def test_stt_prompt_defaults_to_chess_vocab():
+    from chessmachine.config import SttConfig
+    p = SttConfig().prompt.lower()
+    assert p and "chess" in p and "castle" in p          # biases toward chess terms
