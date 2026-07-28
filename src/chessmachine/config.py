@@ -224,6 +224,11 @@ class SpeedsConfig:
 @dataclass
 class MagnetConfig:
     settle_ms: int = 300              # pause after toggling the electromagnet
+    hover_ms: int = 500               # dwell over a piece (at travel height, magnet already on) before
+                                      # dipping to pick it up
+    pick_dip_steps: int = 20          # extra winch half-steps to dip PAST the calibrated pick depth, so a
+                                      # slightly-too-high predetermined height still makes contact
+                                      # (stepmap backend only; 0 disables)
 
 
 @dataclass

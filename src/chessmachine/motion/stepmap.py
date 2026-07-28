@@ -118,6 +118,14 @@ class StepMapMotion(MotionController):
         else:                                            # raise to travel (step 0)
             self._inner.goto_steps(winch=0)
 
+    def pick_dip(self, steps: int) -> None:
+        # Dip the winch `steps` deeper than the mapped square's calibrated pick depth
+        # (down = larger winch count) so a slightly-high predetermined height still
+        # touches. Absolute, so the subsequent raise (goto W0) recovers regardless.
+        # Off-board / unmapped squares have no calibrated depth, so nothing to dip.
+        if self._on_map and self._cur_winch is not None and steps:
+            self._inner.goto_steps(winch=self._cur_winch + int(steps))
+
     def magnet(self, on: bool) -> None:
         self._inner.magnet(on)
 

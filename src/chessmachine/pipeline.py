@@ -444,6 +444,11 @@ class ChessMachine:
                        and self._moves_since_home >= self.cfg.app.rehome_every_n_moves))
             if due:
                 self._rehome()          # silent unless it fails (resets the counter)
+        # Hand the turn back out loud once the move (and any re-home) is finished, so
+        # the player knows it's on them and we're about to start listening. Only when
+        # a completed move leaves THEM on move — not still our turn, not at game over.
+        if finished_ok and not self.game.is_game_over() and not self.game.is_machine_turn():
+            self._say("Your move.")
         return text
 
     def _spawn_motion(self, complete) -> tuple[threading.Thread, dict]:

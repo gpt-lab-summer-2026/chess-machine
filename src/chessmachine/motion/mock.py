@@ -57,6 +57,10 @@ class MockMotion(MotionController):
         self.ops.append(("magnet", bool(on)))
         log.debug("mock: magnet %s", "ON" if on else "OFF")
 
+    def pick_dip(self, steps: int) -> None:
+        self.ops.append(("pick_dip", int(steps)))
+        log.debug("mock: pick_dip %d", int(steps))
+
     def status(self) -> dict:
         return {
             "x": self.x, "z": self.z, "height": self.height,

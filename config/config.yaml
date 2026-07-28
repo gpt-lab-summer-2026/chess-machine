@@ -116,3 +116,6 @@ motion:
     settle_ms: 250          # damp cable swing after a move
   magnet:
     settle_ms: 300
+    hover_ms: 500           # dwell over a piece (magnet already on) before dipping to pick it up
+    pick_dip_steps: 20      # extra winch steps to dip PAST the calibrated pick depth for sure contact
+                            # (the predetermined height isn't always exact); also seats a piece before release

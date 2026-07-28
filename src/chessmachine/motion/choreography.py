@@ -77,8 +77,11 @@ class Choreographer:
     def _pick(self, point: Point) -> None:
         self.ctl.move_xz(point.x, point.z, self.speeds.travel_feed)
         self._sleep(self.speeds.settle_ms)
+        self.ctl.magnet(True)                          # energize on arrival; only ever released at the drop
+        self._sleep(self.magnet_cfg.hover_ms)          # hover over the piece a moment before dipping
         self.ctl.set_pulley(self.geo.cfg.pick_height_mm, self.speeds.lift_feed)
-        self.ctl.magnet(True)
+        self._sleep(self.magnet_cfg.settle_ms)
+        self.ctl.pick_dip(self.magnet_cfg.pick_dip_steps)   # dip past the calibrated height for sure contact
         self._sleep(self.magnet_cfg.settle_ms)
         self.ctl.set_pulley(self.geo.cfg.travel_height_mm, self.speeds.lift_feed)
         self._sleep(self.speeds.settle_ms)
@@ -87,7 +90,10 @@ class Choreographer:
         self.ctl.move_xz(point.x, point.z, self.speeds.travel_feed)
         self._sleep(self.speeds.settle_ms)
         self.ctl.set_pulley(self.geo.cfg.pick_height_mm, self.speeds.lift_feed)
-        self.ctl.magnet(False)
+        self._sleep(self.magnet_cfg.settle_ms)
+        self.ctl.pick_dip(self.magnet_cfg.pick_dip_steps)   # dip to seat the piece on the board before release
+        self._sleep(self.magnet_cfg.settle_ms)
+        self.ctl.magnet(False)                         # release — the ONLY time the magnet turns off mid-move
         self._sleep(self.magnet_cfg.settle_ms)
         self.ctl.set_pulley(self.geo.cfg.travel_height_mm, self.speeds.lift_feed)
         self._sleep(self.speeds.settle_ms)
