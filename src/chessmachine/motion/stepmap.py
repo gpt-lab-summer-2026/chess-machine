@@ -53,6 +53,12 @@ class StepMapMotion(MotionController):
     def close(self) -> None:
         self._inner.close()
 
+    @property
+    def serial(self):
+        """Live pyserial handle from the wrapped transport, so the esp32_whisper
+        STT can share this ONE port for the MAX4466 mic (turn-based, no overlap)."""
+        return self._inner.serial
+
     def _load_map(self) -> None:
         p = pathlib.Path(self.map_path)
         if not p.exists():
@@ -117,6 +123,14 @@ class StepMapMotion(MotionController):
                 self._inner.goto_steps(winch=self._cur_winch)
         else:                                            # raise to travel (step 0)
             self._inner.goto_steps(winch=0)
+
+    def pick_dip(self, steps: int) -> None:
+        # Dip the winch `steps` deeper than the mapped square's calibrated pick depth
+        # (down = larger winch count) so a slightly-high predetermined height still
+        # touches. Absolute, so the subsequent raise (goto W0) recovers regardless.
+        # Off-board / unmapped squares have no calibrated depth, so nothing to dip.
+        if self._on_map and self._cur_winch is not None and steps:
+            self._inner.goto_steps(winch=self._cur_winch + int(steps))
 
     def magnet(self, on: bool) -> None:
         self._inner.magnet(on)

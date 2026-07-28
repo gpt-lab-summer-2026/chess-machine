@@ -46,6 +46,11 @@ class MotionController(ABC):
     def estop(self) -> None:
         """Emergency stop. Backends should override; default is a no-op."""
 
+    def pick_dip(self, steps: int) -> None:
+        """Dip the winch `steps` PAST the current pick depth to guarantee contact
+        when the calibrated pick height is slightly high, then hold at that depth.
+        Default no-op; backends with absolute winch control (stepmap) override it."""
+
     def __enter__(self):
         self.connect()
         return self

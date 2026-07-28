@@ -53,7 +53,7 @@ class LlamaCppClient:
                 "temperature": temperature,
                 "max_tokens": max_tokens,
                 "stream": False,
-                "cache_prompt": False,   # avoid the n_past==n_tokens caching crash
+                "cache_prompt": True,    # reuse the shared system-prompt prefix across calls
             }
             if response_format is not None:
                 body["response_format"] = response_format
@@ -138,7 +138,7 @@ class SlmNLU(NLU):
             try:
                 raw = self.client.chat(
                     build_intent_messages(transcript, context),
-                    json_mode=True, temperature=0.0, max_tokens=192,
+                    json_mode=True, temperature=0.0, max_tokens=96,
                     schema=INTENT_ACTIONS_SCHEMA,
                 )
                 intents = intents_from_json(_extract_json(raw), transcript)
