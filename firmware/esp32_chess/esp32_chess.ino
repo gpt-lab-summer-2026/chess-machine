@@ -90,7 +90,11 @@ const float R_STEPS_PER_MM = 50.0f;  // SAFE UNDERSHOOT: 63.08 drove a1 PAST the
                                      // jog the cart out, note the step count where it JUST reaches a1,
                                      // keep a few-mm margin, R_STEPS_PER_MM = that_count / (387-117.5).
                                      // Never let a move drive INTO the hard stop (open-loop, unsensed).
-const int R_STEP_DIR = +1;           // step sign for +mm (OUTWARD); flip to invert
+const int R_STEP_DIR = -1;           // physical coil direction, applied in railStep so it governs EVERY
+                                     // rail move (JOG/GOTO/MOVE/HOME): +1 = advancing the phase drives the
+                                     // cart OUTWARD, -1 inverts it. The step COUNT convention is unchanged
+                                     // (+ = outward, 0 = inner home). Was +1; the post-rebuild rewire
+                                     // reversed the rail (+ drove inward), so now -1.
 // HALF-step drive + MICROSECOND timing. The speed-up over the original delay(3 ms)
 // comes from the shorter us period here (delay() can't do sub-ms; 0.1 truncated to
 // 0 = too fast = stall). Lower = faster; raise if the loaded gearbox buzzes/stalls.
@@ -412,7 +416,7 @@ void railStep(long steps) {
   const unsigned long stepMs = R_STEP_DELAY_US / 1000;   // whole-ms part of the period
   const unsigned int  stepUs = R_STEP_DELAY_US % 1000;   // sub-ms remainder
   for (long i = 0; i < n; i++) {
-    g_rStepPhase = (g_rStepPhase + dir + 8) & 7;  // 8-phase half-step cycle
+    g_rStepPhase = (g_rStepPhase + dir * R_STEP_DIR + 8) & 7;  // R_STEP_DIR inverts the physical direction
     railWritePhase(g_rStepPhase);
     // Split the period so delay() (>=1 ms) YIELDS to the RTOS each step. A pure
     // delayMicroseconds() busy-wait over thousands of steps starves the idle task
@@ -425,7 +429,7 @@ void railStep(long steps) {
 }
 void railMoveTo(float rmm) {
   rmm = clampf(rmm, R_MIN_MM, R_MAX_MM);
-  long target = lroundf((rmm - R_MIN_MM) * g_rStepsPerMm) * R_STEP_DIR;
+  long target = lroundf((rmm - R_MIN_MM) * g_rStepsPerMm);  // + = outward; R_STEP_DIR is applied in railStep
   railStep(target - g_rStepCount);
   g_curR = rmm;
 }
