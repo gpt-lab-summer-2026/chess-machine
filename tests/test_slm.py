@@ -5,11 +5,13 @@ canned string or raising. The fallback is the real `RuleBasedNLU`, so we also
 confirm the SLM degrades to deterministic behavior on any failure.
 """
 import json
+import urllib.error
 
 import chess
 import pytest
 
 from chessmachine.config import SlmConfig
+from chessmachine.nlu.intents import INTENT_ACTIONS_SCHEMA
 from chessmachine.nlu.rule_based import RuleBasedNLU
 from chessmachine.nlu.slm import LlamaCppClient, SlmNLU, _extract_json
 
@@ -20,7 +22,7 @@ class FakeClient:
         self.raises = raises
         self.calls = 0
 
-    def chat(self, messages, json_mode=False, temperature=None, max_tokens=None):
+    def chat(self, messages, json_mode=False, temperature=None, max_tokens=None, schema=None):
         self.calls += 1
         if self.raises:
             raise RuntimeError("model unavailable")
@@ -69,12 +71,46 @@ def test_interpret_falls_back_on_exception():
     client = FakeClient(raises=True)
     nlu = SlmNLU(client, RuleBasedNLU())
     assert nlu.interpret("take that back", _ctx())[0].action == "undo"
-    assert client.calls == 1                     # the model was tried first
+    assert client.calls == 2                     # initial try + one retry, then fallback
 
 
 def test_interpret_falls_back_on_garbage_output():
     nlu = SlmNLU(FakeClient("no json at all"), RuleBasedNLU())
     assert nlu.interpret("let's start a new game", _ctx())[0].action == "new_game"
+
+
+class FlakyClient:
+    """Raises on the first call, returns `good` after that."""
+    def __init__(self, good):
+        self.good = good
+        self.calls = 0
+
+    def chat(self, messages, json_mode=False, temperature=None, max_tokens=None, schema=None):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("transient")
+        return self.good
+
+
+def test_interpret_retries_once_then_uses_model():
+    client = FlakyClient('{"actions": [{"action": "engine_move"}]}')
+    nlu = SlmNLU(client, RuleBasedNLU())
+    assert nlu.interpret("your move", _ctx())[0].action == "engine_move"
+    assert client.calls == 2
+
+
+def test_interpret_downgrades_question_to_analyze():
+    # SLM misclassifies a question as a move; the guard rewrites it to analyze.
+    reply = '{"actions": [{"action": "opponent_move", "move": "g1f3"}]}'
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    assert nlu.interpret("what is threatening my knight", _ctx())[0].action == "analyze"
+
+
+def test_interpret_keeps_real_move():
+    reply = '{"actions": [{"action": "opponent_move", "move": "e2e4"}]}'
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    out = nlu.interpret("e4", _ctx())
+    assert out[0].action == "opponent_move"
 
 
 # -- phrasing / small talk / commentary -------------------------------------- #
@@ -131,3 +167,44 @@ def test_chat_server_builds_request_and_parses_response(monkeypatch):
     assert out == "hello"
     assert captured["url"].endswith("/v1/chat/completions")
     assert captured["body"]["response_format"] == {"type": "json_object"}
+
+
+def test_intent_actions_schema_wraps_per_action_schema():
+    from chessmachine.nlu.intents import INTENT_JSON_SCHEMA
+    assert INTENT_ACTIONS_SCHEMA["properties"]["actions"]["items"] is INTENT_JSON_SCHEMA
+    assert INTENT_ACTIONS_SCHEMA["required"] == ["actions"]
+
+
+def test_chat_server_sends_json_schema_and_disables_cache(monkeypatch):
+    captured = {}
+
+    def fake_urlopen(req, timeout=None):
+        captured["body"] = json.loads(req.data.decode())
+        return _FakeResp({"choices": [{"message": {"content": "{}"}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = LlamaCppClient(SlmConfig(mode="server", server_url="http://x:8080"))
+    client.chat([{"role": "user", "content": "hi"}], json_mode=True,
+                schema=INTENT_ACTIONS_SCHEMA)
+
+    assert captured["body"]["response_format"]["type"] == "json_schema"
+    assert captured["body"]["cache_prompt"] is False
+
+
+def test_chat_server_falls_back_to_json_object_on_400(monkeypatch):
+    seen = []
+
+    def fake_urlopen(req, timeout=None):
+        body = json.loads(req.data.decode())
+        seen.append(body["response_format"]["type"])
+        if body["response_format"]["type"] == "json_schema":
+            raise urllib.error.HTTPError(req.full_url, 400, "bad schema", {}, None)
+        return _FakeResp({"choices": [{"message": {"content": '{"actions": []}'}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    client = LlamaCppClient(SlmConfig(mode="server", server_url="http://x:8080"))
+    out = client.chat([{"role": "user", "content": "hi"}], json_mode=True,
+                      schema={"type": "object"})
+
+    assert seen == ["json_schema", "json_object"]
+    assert out == '{"actions": []}'

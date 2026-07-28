@@ -46,6 +46,8 @@ class NLU(ABC):
         return move_comment_summary(
             quality, info.get("motifs", []), info.get("difficulty", ""),
             info.get("mover", ""), info.get("san", ""),
+            mover_is_machine=info.get("mover_is_machine", False),
+            punished=info.get("punished", False),
         )
 
     def close(self) -> None:  # pragma: no cover

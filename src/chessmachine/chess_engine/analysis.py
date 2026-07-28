@@ -28,6 +28,22 @@ class MaterialBalance(TypedDict):
     leader: str          # "white" | "black" | "even"
 
 
+class SquareFacts(TypedDict):
+    """Ground-truth facts about a single occupied square (for piece/square
+    questions like "is my knight on c4 good" or "what threatens my knight").
+    Computed purely from the board — no evaluation is invented."""
+
+    square: str                  # e.g. "c4"
+    piece: str                   # e.g. "knight"
+    color: str                   # "white" | "black"
+    attackers: list[str]         # enemy pieces attacking it, e.g. ["pawn on b5"]
+    defenders: list[str]         # friendly pieces defending it
+    is_hanging: bool             # attacked and undefended
+    is_pinned: bool              # absolutely pinned to its own king
+    is_outpost: bool             # knight on a pawn-protected, unchallengeable square
+    controls: int                # number of squares the piece attacks/controls
+
+
 class PositionFacts(TypedDict):
     """Ground-truth facts about a position (produced by `describe_position`).
 
@@ -48,6 +64,7 @@ class PositionFacts(TypedDict):
     pv_sans: list[str]           # principal variation in SAN
     last_move_san: str | None
     game_over: bool
+    square: SquareFacts | None   # set when the question is about a specific square/piece
 
 
 def material_balance(board: chess.Board) -> MaterialBalance:
@@ -128,8 +145,66 @@ def describe_position(
         "pv_sans": _pv_sans(board, analysis.pv),
         "last_move_san": last_move_san,
         "game_over": board.is_game_over(claim_draw=True),
+        "square": None,   # filled in by the caller for a piece/square question
     }
     return facts
+
+
+def describe_square(board: chess.Board, square: int) -> SquareFacts | None:
+    """Ground-truth facts about the piece on `square` (None if the square is empty).
+
+    Pure board analysis — attackers/defenders, hanging, pin, knight outpost, and
+    how many squares the piece controls. Used to answer piece/square questions
+    with real facts instead of a generic whole-board summary.
+    """
+    piece = board.piece_at(square)
+    if piece is None:
+        return None
+    color = piece.color
+
+    def _names(squares: chess.SquareSet) -> list[str]:
+        out = []
+        for s in squares:
+            p = board.piece_at(s)
+            if p is not None:
+                out.append(f"{chess.piece_name(p.piece_type)} on {chess.square_name(s)}")
+        return out
+
+    attackers = _names(board.attackers(not color, square))
+    defenders = _names(board.attackers(color, square))
+    return {
+        "square": chess.square_name(square),
+        "piece": chess.piece_name(piece.piece_type),
+        "color": "white" if color == chess.WHITE else "black",
+        "attackers": attackers,
+        "defenders": defenders,
+        "is_hanging": bool(attackers) and not defenders,
+        "is_pinned": board.is_pinned(color, square),
+        "is_outpost": piece.piece_type == chess.KNIGHT and _is_outpost(board, square, color),
+        "controls": len(board.attacks(square)),
+    }
+
+
+def square_summary(sq: SquareFacts) -> str:
+    """Deterministic spoken description of one square's piece (SLM-free)."""
+    who = f"The {sq['color']} {sq['piece']} on {sq['square']}"
+    parts = []
+    if sq["is_hanging"]:
+        by = sq["attackers"][0] if sq["attackers"] else "a piece"
+        parts.append(f"{who} is hanging — attacked by the {by} and undefended.")
+    elif sq["attackers"] and sq["defenders"]:
+        parts.append(f"{who} is attacked by the {sq['attackers'][0]} but defended by the "
+                     f"{sq['defenders'][0]}.")
+    elif sq["attackers"]:
+        parts.append(f"{who} is attacked by the {sq['attackers'][0]}.")
+    else:
+        parts.append(f"{who} is not under attack.")
+    if sq["is_pinned"]:
+        parts.append("It's pinned to the king.")
+    if sq["is_outpost"]:
+        parts.append("It sits on a strong outpost.")
+    parts.append(f"It controls {sq['controls']} square" + ("s." if sq["controls"] != 1 else "."))
+    return " ".join(parts)
 
 
 def facts_to_summary(facts: PositionFacts) -> str:
@@ -138,6 +213,9 @@ def facts_to_summary(facts: PositionFacts) -> str:
         return "The game is over."
 
     parts: list[str] = []
+    sq = facts.get("square")
+    if sq:
+        parts.append(square_summary(sq))
     parts.append(facts["verdict"].capitalize() + ".")
 
     mat = facts["material"]
@@ -228,6 +306,26 @@ def _offers_material(board_before: chess.Board, move: chess.Move) -> bool:
     if not defenders:
         return pv >= 3 or min_attacker < pv     # left a real piece en prise
     return min_attacker < pv                     # attacked by something cheaper
+
+
+def machine_pov_cp(res: AnalysisResult, machine_is_white: bool) -> int | None:
+    """Evaluation from the MACHINE's point of view, in centipawns (mate mapped to
+    a large magnitude). Used to judge whether its own blunder got punished."""
+    return _to_cp_mover(res, machine_is_white)
+
+
+def blunder_punished(cp_after_blunder: int | None, cp_now: int | None,
+                     giveback_cp: int = 100) -> bool:
+    """Did the opponent PUNISH the machine's blunder?
+
+    Both evals are the MACHINE's POV in centipawns: `cp_after_blunder` right after
+    the machine's bad move, `cp_now` after the opponent's reply. Punished if the
+    opponent kept the advantage — i.e. gave back no more than `giveback_cp`. If
+    either eval is unknown, treat as punished (own the mistake rather than hide it).
+    """
+    if cp_after_blunder is None or cp_now is None:
+        return True
+    return cp_now <= cp_after_blunder + giveback_cp
 
 
 def classify_move_quality(engine: ChessEngine, board_before: chess.Board,
@@ -399,12 +497,22 @@ def find_tactics(board_after: chess.Board, mover: bool) -> list[str]:
 # --------------------------------------------------------------------------- #
 # Difficulty-scaled "should we speak, and what do we say" helpers.
 # --------------------------------------------------------------------------- #
+# Phrases addressed to the HUMAN's move (second person / neutral).
 _LABEL_PHRASE = {
     "blunder": "That looks like a blunder.",
     "mistake": "That's a mistake.",
     "best": "That's the best move.",
     "great": "Great move — practically the only one that holds.",
     "brilliant": "Brilliant — a sacrifice that works.",
+}
+# First-person phrases for the MACHINE's OWN move (correct attribution — don't
+# blame the human for a move the robot made).
+_LABEL_PHRASE_SELF = {
+    "blunder": "I blundered there.",
+    "mistake": "That was a mistake on my part.",
+    "best": "That was my best move.",
+    "great": "That was practically the only move that held for me.",
+    "brilliant": "That was a sound sacrifice by me.",
 }
 _TEACH = {
     "fork": "A fork is one piece attacking two at once.",
@@ -452,13 +560,23 @@ def _join_motifs(motifs: list) -> str:
 
 
 def move_comment_summary(quality: MoveQuality, motifs: list, difficulty: str,
-                         mover: str = "", san: str = "") -> str:
-    """Deterministic spoken comment (SLM-free fallback / rule-based backend)."""
+                         mover: str = "", san: str = "", mover_is_machine: bool = False,
+                         punished: bool = False) -> str:
+    """Deterministic spoken comment (SLM-free fallback / rule-based backend).
+
+    `mover_is_machine` selects first-person phrasing so the machine owns its own
+    move instead of blaming the human; `punished` marks a deferred self-critique
+    the opponent just capitalized on.
+    """
     tier = difficulty_tier(difficulty)
     parts: list[str] = []
-    phrase = _LABEL_PHRASE.get(quality.label)
+    table = _LABEL_PHRASE_SELF if mover_is_machine else _LABEL_PHRASE
+    phrase = table.get(quality.label)
     if phrase:
-        parts.append(phrase)
+        if mover_is_machine and punished:
+            parts.append("You pounced on that — " + phrase[0].lower() + phrase[1:])
+        else:
+            parts.append(phrase)
     if motifs:
         parts.append(_join_motifs(motifs) + ".")
         if tier == "easy":

@@ -45,6 +45,62 @@ def normalize_spoken(text: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
+# Cues that mark an utterance as a question / analysis request rather than a
+# move. Kept STT-robust: matched against the NORMALIZED string (no punctuation),
+# because Whisper output usually has no '?'.
+_INTERROGATIVES = {
+    "what", "whats", "which", "where", "why", "how", "hows", "who",
+    "is", "are", "am", "do", "does", "did", "can", "could", "should",
+    "would", "will",
+}
+_ANALYSIS_STEMS = (
+    "threat", "attack", "hang", "defend", "protect", "safe", "danger",
+    "win", "better", "worse", "good", "best", "weak", "strong",
+    "advantage", "worth", "should i", "is it", "how is",
+)
+
+
+def looks_like_analysis(transcript: str) -> bool:
+    """True if the utterance reads as a question / analysis request, not a move.
+
+    Used only to DOWNGRADE a move classification to analyze, so a false positive
+    costs a re-route (the machine answers instead of moving), never a wrong move.
+    Operates on the normalized transcript so it never depends on a '?' that STT
+    tends to drop.
+    """
+    t = normalize_spoken(transcript)
+    if not t:
+        return False
+    if t.split()[0] in _INTERROGATIVES:
+        return True
+    return any(stem in t for stem in _ANALYSIS_STEMS)
+
+
+def question_target_square(question: str, board: chess.Board,
+                           prefer_color: bool) -> int | None:
+    """Resolve a piece/square reference in an analysis question to a board square.
+
+    "...knight on c4..." -> c4; a bare piece word ("my knight") -> that piece if
+    the preferred side has exactly one of them, else None (ambiguous -> caller
+    falls back to a whole-board answer). `prefer_color` is the asker's side (the
+    human); "your"/"you" flips it to the other side. Returns a square index or None.
+    """
+    t = normalize_spoken(question)
+    if re.search(r"\byour\b|\byoure\b|\byou\b", t):
+        prefer_color = not prefer_color
+    squares = _SQUARE_RE.findall(t)
+    if squares:
+        return chess.parse_square(squares[0])
+    ptype = next((pt for word, pt in _PIECE_WORDS.items()
+                  if re.search(rf"\b{word}\b", t)), None)
+    if ptype is None:
+        return None
+    owned = [s for s in chess.SQUARES
+             if (p := board.piece_at(s)) is not None
+             and p.color == prefer_color and p.piece_type == ptype]
+    return owned[0] if len(owned) == 1 else None
+
+
 def _try_exact(text: str, board: chess.Board) -> chess.Move | None:
     s = text.strip()
     # SAN (handles Nf3, exd5, O-O, e8=Q+, ...). parse_san already checks legality.

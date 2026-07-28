@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..config import SlmConfig
 from .base import NLU
-from .intents import Intent, intents_from_json
+from .intents import INTENT_ACTIONS_SCHEMA, Intent, intents_from_json
+from .move_parsing import looks_like_analysis
 from .prompts import build_analysis_messages, build_intent_messages, build_move_comment_messages
 
 if TYPE_CHECKING:
@@ -31,32 +32,50 @@ class LlamaCppClient:
 
     def chat(self, messages: list[dict], json_mode: bool = False,
              temperature: float | None = None,
-             max_tokens: int | None = None) -> str:
+             max_tokens: int | None = None,
+             schema: dict | None = None) -> str:
         temp = self.cfg.temperature if temperature is None else temperature
         maxt = self.cfg.max_tokens if max_tokens is None else max_tokens
         if self.cfg.mode == "inproc":
-            return self._chat_inproc(messages, json_mode, temp, maxt)
-        return self._chat_server(messages, json_mode, temp, maxt)
+            return self._chat_inproc(messages, json_mode, temp, maxt, schema)
+        return self._chat_server(messages, json_mode, temp, maxt, schema)
 
-    def _chat_server(self, messages, json_mode, temperature, max_tokens) -> str:
+    def _chat_server(self, messages, json_mode, temperature, max_tokens,
+                     schema=None) -> str:
         url = self.cfg.server_url.rstrip("/") + "/v1/chat/completions"
-        body = {
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
-        if json_mode:
-            body["response_format"] = {"type": "json_object"}
-        req = urllib.request.Request(
-            url, data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=self.cfg.request_timeout_s) as resp:
-            payload = json.loads(resp.read().decode())
-        return payload["choices"][0]["message"]["content"]
 
-    def _chat_inproc(self, messages, json_mode, temperature, max_tokens) -> str:
+        def _post(response_format) -> str:
+            body = {
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": False,
+                "cache_prompt": False,   # avoid the n_past==n_tokens caching crash
+            }
+            if response_format is not None:
+                body["response_format"] = response_format
+            req = urllib.request.Request(
+                url, data=json.dumps(body).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=self.cfg.request_timeout_s) as resp:
+                payload = json.loads(resp.read().decode())
+            return payload["choices"][0]["message"]["content"]
+
+        if schema is not None:
+            rf = {"type": "json_schema",
+                  "json_schema": {"name": "intent", "schema": schema, "strict": True}}
+            try:
+                return _post(rf)
+            except urllib.error.HTTPError as exc:
+                if exc.code != 400:
+                    raise
+                log.warning("server rejected json_schema (%s); retrying with json_object", exc)
+                return _post({"type": "json_object"})
+        return _post({"type": "json_object"} if json_mode else None)
+
+    def _chat_inproc(self, messages, json_mode, temperature, max_tokens,
+                     schema=None) -> str:
         if self._llm is None:
             from llama_cpp import Llama  # lazy: heavy dependency
             self._llm = Llama(
@@ -67,7 +86,9 @@ class LlamaCppClient:
                 verbose=False,
             )
         kwargs = {"messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-        if json_mode:
+        if schema is not None:
+            kwargs["response_format"] = {"type": "json_object", "schema": schema}
+        elif json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         out = self._llm.create_chat_completion(**kwargs)
         return out["choices"][0]["message"]["content"]
@@ -96,19 +117,35 @@ class SlmNLU(NLU):
         self.fallback = fallback
 
     def interpret(self, transcript: str, context: dict) -> list[Intent]:
-        try:
-            raw = self.client.chat(
-                build_intent_messages(transcript, context),
-                json_mode=True, temperature=0.0, max_tokens=192,
-            )
-            intents = intents_from_json(_extract_json(raw), transcript)
-            known = [i for i in intents if i.action != "unknown"]
-            if known:
-                return known
-            log.info("SLM returned no known action; trying rule-based fallback")
-        except Exception as exc:  # noqa: BLE001 - any failure should degrade gracefully
-            log.warning("SLM interpret failed (%s); using rule-based fallback", exc)
+        last_exc: Exception | None = None
+        for attempt in range(2):          # initial try + one retry
+            try:
+                raw = self.client.chat(
+                    build_intent_messages(transcript, context),
+                    json_mode=True, temperature=0.0, max_tokens=192,
+                    schema=INTENT_ACTIONS_SCHEMA,
+                )
+                intents = intents_from_json(_extract_json(raw), transcript)
+                intents = [self._guard(i, transcript) for i in intents]
+                known = [i for i in intents if i.action != "unknown"]
+                if known:
+                    return known
+                log.info("SLM returned no known action; using rule-based fallback")
+                break                     # parsed OK but nothing usable -> don't retry
+            except Exception as exc:      # noqa: BLE001 - degrade gracefully
+                last_exc = exc
+                log.warning("SLM interpret attempt %d failed (%s)", attempt + 1, exc)
+        if last_exc is not None:
+            log.warning("SLM interpret failed after retry; using rule-based fallback")
         return self.fallback.interpret(transcript, context)
+
+    @staticmethod
+    def _guard(intent: Intent, transcript: str) -> Intent:
+        """Downgrade a misclassified question to analyze. STT-robust; only ever
+        turns opponent_move into analyze, so real moves are never touched."""
+        if intent.action == "opponent_move" and looks_like_analysis(transcript):
+            return Intent(action="analyze", question=transcript, text=transcript)
+        return intent
 
     def phrase_analysis(self, question: str, facts: PositionFacts) -> str:
         try:

@@ -25,6 +25,7 @@ from .nlu import (
     describe_candidates,
     explain_move_failure,
     parse_move,
+    question_target_square,
     resolve_side_request,
 )
 from .nlu.intents import Intent
@@ -68,6 +69,9 @@ class ChessMachine:
         self._last_spoken = ""
         self._pending: str | None = None   # a destructive action awaiting confirmation
         self._moves_since_home = 0         # finished machine moves since the last re-home (cadence)
+        # A blunder/mistake the MACHINE just made, held back until we see whether
+        # the opponent punishes it (C: only self-critique if it actually costs).
+        self._pending_self_critique: dict | None = None
         self.clock = MatchClock()
 
     # -- lifecycle ----------------------------------------------------------- #
@@ -139,8 +143,16 @@ class ChessMachine:
         return " ".join(replies)
 
     def _resolve_pending(self, transcript: str) -> str:
-        """Resolve a yes/no answer to a pending confirmation (new game or undo)."""
+        """Resolve a yes/no answer to a pending confirmation (new game, undo, or
+        a low-confidence move recovered from the SLM)."""
         pending, self._pending = self._pending, None
+        if pending and pending.startswith("confirm_move:"):
+            if not _is_affirmative(transcript):
+                return self._say("Okay, ignoring that. Say your move again?")
+            move = chess.Move.from_uci(pending.split(":", 1)[1])
+            if move not in self.game.board.legal_moves:
+                return self._say("That move isn't legal now; say it again?")
+            return self._play_opponent_move(move)
         if _is_affirmative(transcript):
             if pending == "undo":
                 return self._really_undo()
@@ -226,8 +238,17 @@ class ChessMachine:
         return spoken
 
     def _do_analyze(self, intent: Intent) -> str:
-        facts = analysis.describe_position(self.game.board, self.engine, self._last_san())
-        answer = self.nlu.phrase_analysis(intent.question or intent.text or "", facts)
+        board = self.game.board
+        question = intent.question or intent.text or ""
+        facts = analysis.describe_position(board, self.engine, self._last_san())
+        # If the question is about a specific piece/square ("is my knight on c4
+        # good", "what threatens my knight"), attach that square's grounded facts
+        # so the answer is specific instead of a generic whole-board summary.
+        # "my" resolves to the human's side; the helper flips it on "your".
+        target = question_target_square(question, board, prefer_color=not self.machine_color)
+        if target is not None:
+            facts["square"] = analysis.describe_square(board, target)
+        answer = self.nlu.phrase_analysis(question, facts)
         return self._say(answer)
 
     def _do_status(self) -> str:
@@ -252,23 +273,20 @@ class ChessMachine:
         if self.game.is_game_over():
             return self._say(self.game.result_text())
         board = self.game.board
-        # Resolve from the user's literal words first; the SLM's `move` field is
-        # only a fallback. A small model sometimes substitutes a different (or
-        # wrong-color) move — especially when the user plays Black and the few-shot
-        # examples are White moves — and that bogus move would otherwise be played
-        # or rejected, swallowing the user's real move (and the auto-reply with it).
-        candidates: list[chess.Move] = []
-        for text in (intent.text, intent.move):
-            if text:
-                candidates = parse_move(text, board)
-                if candidates:
-                    break
+        # Ground the move in what the user LITERALLY said. The SLM's `move` field
+        # is only a tie-breaker among these candidates, never a source on its own,
+        # so a mangled transcript or a hallucinated move can't actuate a piece.
+        candidates = parse_move(intent.text or "", board)
         if not candidates:
+            # Literal words didn't resolve. If the SLM proposed a single legal
+            # move, CONFIRM it (STT may have dropped a word) rather than guessing.
+            slm_moves = parse_move(intent.move, board) if intent.move else []
+            if len(slm_moves) == 1:
+                self._pending = f"confirm_move:{slm_moves[0].uci()}"
+                return self._say(f"Did you mean {board.san(slm_moves[0])}? Say yes.")
             return self._say(explain_move_failure(intent.text or intent.move or "", board))
-        # If the spoken form was ambiguous (e.g. "knight to f6" with two knights
-        # that reach f6), let the SLM's structured move break the tie — but only
-        # when it resolves to exactly one of the candidates we already found, so
-        # a hallucinated or wrong-color move can't slip in.
+        # Ambiguous literal words: let the SLM's move break the tie, but only when
+        # it resolves to exactly one of the candidates we already found.
         if len(candidates) > 1 and intent.move:
             slm_moves = parse_move(intent.move, board)
             if len(slm_moves) == 1 and slm_moves[0] in candidates:
@@ -276,8 +294,11 @@ class ChessMachine:
         if len(candidates) > 1:
             return self._say(f"ambiguous move: did you mean "
                              f"{describe_candidates(candidates, board)}?")
-        spoken = self._play_move(candidates[0], "Okay,")   # _play_move speaks internally
-        # Auto-reply with the engine's move if it's now our turn.
+        return self._play_opponent_move(candidates[0])
+
+    def _play_opponent_move(self, move: chess.Move) -> str:
+        """Actuate the human's move, then auto-reply with the engine if it's our turn."""
+        spoken = self._play_move(move, "Okay,")   # _play_move speaks internally
         if (self.cfg.app.auto_reply and not self.game.is_game_over()
                 and self.game.is_machine_turn()):
             try:
@@ -391,6 +412,11 @@ class ChessMachine:
         comment = self._move_comment(board_before, move, san)
         if comment:
             text += " " + comment
+        # If the opponent (this move) just punished a blunder the machine held
+        # back, own it now — otherwise it stays unspoken.
+        critique = self._resolve_self_critique(board_before)
+        if critique:
+            text += " " + critique
         if self.game.is_game_over():
             text += " " + self.game.result_text()
 
@@ -453,6 +479,7 @@ class ChessMachine:
             board_after = board_before.copy()
             board_after.push(move)
             mover = board_before.turn
+            mover_is_machine = mover == self.machine_color
             motifs = analysis.find_tactics(board_after, mover)
             if not analysis.should_comment(quality, motifs, self.difficulty):
                 return ""
@@ -466,11 +493,49 @@ class ChessMachine:
                 "tier": analysis.difficulty_tier(self.difficulty),
                 "san": san,
                 "mover": GameState.color_name(mover),
+                "mover_is_machine": mover_is_machine,
             }
+            # C: don't flag the machine's OWN blunder/mistake right away — hold it
+            # back and only voice it if the opponent actually punishes it (checked
+            # after their reply in _resolve_self_critique). Machine's good moves
+            # and all of the human's moves comment immediately, with attribution.
+            if (mover_is_machine and self.cfg.app.self_critique_only_if_punished
+                    and quality.label in ("blunder", "mistake")):
+                res = self.engine.analyse(board_after)
+                self._pending_self_critique = {
+                    "info": info,
+                    "cp_after": analysis.machine_pov_cp(res, self.machine_color == chess.WHITE),
+                }
+                return ""
             return self.nlu.comment_on_move(info)
         except Exception:  # noqa: BLE001 - commentary must never break a move
             log.exception("Move commentary failed")
             return ""
+
+    def _resolve_self_critique(self, board_before: chess.Board) -> str:
+        """Voice a held-back self-critique iff the move just played (by the
+        opponent) punished the machine's earlier blunder. `board_before` is the
+        position before this move; `self.game.board` is already after it. Returns
+        the spoken critique, or "" (drop it silently if the opponent let it go)."""
+        pending = self._pending_self_critique
+        if pending is None:
+            return ""
+        # Only the opponent's reply can "punish" it; if this move is the machine's
+        # own, keep waiting for the human's response.
+        if board_before.turn == self.machine_color:
+            return ""
+        self._pending_self_critique = None
+        if not getattr(self.engine, "provides_evaluation", False):
+            return ""
+        try:
+            res = self.engine.analyse(self.game.board)
+            cp_now = analysis.machine_pov_cp(res, self.machine_color == chess.WHITE)
+            if analysis.blunder_punished(pending["cp_after"], cp_now):
+                info = {**pending["info"], "punished": True}
+                return self.nlu.comment_on_move(info)
+        except Exception:  # noqa: BLE001 - commentary must never break a move
+            log.exception("Deferred self-critique failed")
+        return ""
 
     def _resolve_difficulty(self, name: str) -> tuple[str, DifficultyPreset] | None:
         name = (name or "").strip().lower()

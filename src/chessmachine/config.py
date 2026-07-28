@@ -240,6 +240,7 @@ class AppConfig:
     rehome_on_capture: bool = True    # re-home after a capture (subsumed by rehome_after_move when on)
     rehome_every_n_moves: int = 0     # re-home every N finished machine moves (0 = off). With the base
                                       # limit switch, drift is bounded, so periodic homing beats per-move.
+    self_critique_only_if_punished: bool = True  # voice own blunder only if opponent punishes it
     log_level: str = "INFO"
 
 
