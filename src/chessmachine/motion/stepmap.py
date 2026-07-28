@@ -53,6 +53,12 @@ class StepMapMotion(MotionController):
     def close(self) -> None:
         self._inner.close()
 
+    @property
+    def serial(self):
+        """Live pyserial handle from the wrapped transport, so the esp32_whisper
+        STT can share this ONE port for the MAX4466 mic (turn-based, no overlap)."""
+        return self._inner.serial
+
     def _load_map(self) -> None:
         p = pathlib.Path(self.map_path)
         if not p.exists():

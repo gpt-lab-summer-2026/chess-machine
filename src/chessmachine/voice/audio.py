@@ -7,6 +7,7 @@ for whisper. Heavy deps are imported lazily so the module loads without them.
 from __future__ import annotations
 
 import logging
+import shutil
 from typing import TYPE_CHECKING
 
 from ..config import AudioConfig
@@ -89,8 +90,50 @@ class AudioCapture:
 
 
 def play(samples: np.ndarray, sample_rate: int, device: int | str | None = None) -> None:
-    """Play float32 samples on the speaker, blocking until done."""
+    """Play float32 samples on the speaker, blocking until done.
+
+    On the Pi, output is routed through PipeWire via `pw-play`: PortAudio/ALSA
+    only sees the raw HDMI device and can't reach the Bluetooth sink, whereas
+    PipeWire owns the BT speaker and transparently resamples/reformats to it.
+    Falls back to sounddevice where `pw-play` isn't installed (e.g. dev boxes).
+    """
+    pw_play = shutil.which("pw-play")
+    if pw_play is not None:
+        _play_via_pipewire(pw_play, samples, sample_rate)
+        return
     import sounddevice as sd
 
     sd.play(samples, samplerate=sample_rate, device=device)
     sd.wait()
+
+
+def _play_via_pipewire(pw_play: str, samples: np.ndarray, sample_rate: int) -> None:
+    """Write samples to a temp WAV and play it through PipeWire.
+
+    A WAV file (not a raw stdin pipe) is used because pw-play is libsndfile-
+    backed and needs the header to know the rate/format; PipeWire then routes
+    to the current default sink (the Bluetooth speaker) and resamples as needed.
+    """
+    import os
+    import subprocess
+    import tempfile
+    import wave
+
+    import numpy as np
+
+    arr = np.asarray(samples)
+    if arr.dtype != np.int16:                     # Kokoro emits float32 in [-1, 1]
+        arr = (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2")
+    channels = 1 if arr.ndim == 1 else arr.shape[1]
+
+    fd, path = tempfile.mkstemp(suffix=".wav")
+    os.close(fd)
+    try:
+        with wave.open(path, "wb") as w:
+            w.setnchannels(channels)
+            w.setsampwidth(2)
+            w.setframerate(sample_rate)
+            w.writeframes(arr.tobytes())
+        subprocess.run([pw_play, path], check=True)
+    finally:
+        os.unlink(path)
