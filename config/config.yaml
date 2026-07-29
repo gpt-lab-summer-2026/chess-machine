@@ -14,8 +14,11 @@ app:
   log_level: INFO
 
 audio:
-  input_device: null        # null = system default mic
-  output_device: null
+  input_device: default     # ALSA/PipeWire plug device -- NOT the raw USB mic.
+                            # The AK5370 USB mic's hw:2,0 only does 44.1/48 kHz and
+                            # REJECTS the 16 kHz whisper needs (PaErrorCode -9997);
+                            # "default" resamples. Don't pin this to "AK5370"/hw:2,0.
+  output_device: null       # unused: playback goes via pw-play (see voice/audio.py)
   sample_rate: 16000        # whisper wants 16 kHz mono
   vad:
     enabled: true
@@ -23,7 +26,7 @@ audio:
     silence_ms: 800         # trailing silence that ends an utterance
 
 stt:
-  backend: esp32_whisper    # esp32_whisper (MAX4466 serial) | network_whisper (phone over WiFi, see docs/phone_mic_setup.md) | distil_whisper (local mic) | stdin (dev)
+  backend: distil_whisper   # distil_whisper (USB mic via sounddevice) | esp32_whisper (MAX4466 serial) | network_whisper (phone over WiFi, see docs/phone_mic_setup.md) | stdin (dev)
   model: distil-small.en    # faster-whisper alias -> CTranslate2 (use distil-medium.en for accuracy)
   device: cpu
   compute_type: int8
