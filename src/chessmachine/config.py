@@ -41,6 +41,17 @@ class AudioConfig:
 # "e4", "castle") transcribe far more reliably at the mic's 8 kHz — the user does
 # NOT have to speak phonetically ("bravo four"). Kept short so it biases, not
 # dominates. Set stt.prompt: "" to disable.
+#
+# DO NOT LENGTHEN THIS. Measured on distil-small.en via a TTS->STT round trip
+# (Kokoro synthesises the phrase, whisper transcribes it):
+#     181 chars (this)  -> "recalibrate" and "knight to f3" both transcribe
+#     ~300 chars        -> short phrases start returning EMPTY
+#     ~400 chars        -> every phrase returns EMPTY
+# A long initial_prompt fills the decoder's context and the model predicts an
+# immediate end-of-transcript on a short utterance, so the mic goes deaf. It is
+# deliberately limited to NOTATION, which is the part whisper gets wrong; the
+# spoken commands ("your move", "take back", "recalibrate") transcribe correctly
+# with no prompt at all, so adding them costs accuracy and buys nothing.
 _CHESS_STT_PROMPT = (
     "Chess moves and squares: e4, d5, Nf3, Bc4, Qxd5, O-O, castle kingside, "
     "knight to f3, bishop takes e5, pawn e4, rook a1, queen d1, king e2, "

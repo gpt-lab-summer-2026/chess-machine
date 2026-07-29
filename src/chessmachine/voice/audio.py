@@ -18,10 +18,16 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# A Bluetooth sink wakes from idle with ~0.3-0.5 s of latency, which clips the
-# start of a fresh utterance ("Chess machine ready" -> "ess machine ready"). We
-# prepend this much silence to each pw-play so only silence is lost, never speech.
-_BT_LEAD_IN_S = 0.5
+# Small silence prepended to each pw-play, so any amplifier ramp on the speaker
+# eats silence rather than the first syllable.
+#
+# This used to be 0.5 s and STILL clipped, because padding was the wrong fix: the
+# BT sink was being SUSPENDED after 5 s idle (WirePlumber's default), and on resume
+# PipeWire renegotiates the A2DP link and drops whatever is written meanwhile --
+# pad included. The real fix is session.suspend-timeout-seconds = 0 for bluez nodes
+# (~/.config/wireplumber/wireplumber.conf.d/50-bt-no-suspend.conf), which keeps the
+# link up so playback starts immediately. This short pad is just cheap insurance.
+_BT_LEAD_IN_S = 0.15
 
 
 def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
