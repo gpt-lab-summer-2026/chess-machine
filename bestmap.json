@@ -467,5 +467,374 @@
       "rail": 0,
       "winch": 8150
     }
+  },
+  "predicted": {
+    "a1": {
+      "base": -318,
+      "rail": 18906,
+      "winch": 7737
+    },
+    "b1": {
+      "base": -438,
+      "rail": 17582,
+      "winch": 7766
+    },
+    "c1": {
+      "base": -572,
+      "rail": 16336,
+      "winch": 7792
+    },
+    "d1": {
+      "base": -719,
+      "rail": 15180,
+      "winch": 7817
+    },
+    "e1": {
+      "base": -882,
+      "rail": 14128,
+      "winch": 7839
+    },
+    "f1": {
+      "base": -1061,
+      "rail": 13194,
+      "winch": 7859
+    },
+    "g1": {
+      "base": -1256,
+      "rail": 12395,
+      "winch": 7876
+    },
+    "h1": {
+      "base": -1468,
+      "rail": 11746,
+      "winch": 7890
+    },
+    "a2": {
+      "base": -210,
+      "rail": 17582,
+      "winch": 7766
+    },
+    "b2": {
+      "base": -329,
+      "rail": 16188,
+      "winch": 7795
+    },
+    "c2": {
+      "base": -463,
+      "rail": 14869,
+      "winch": 7823
+    },
+    "d2": {
+      "base": -613,
+      "rail": 13637,
+      "winch": 7850
+    },
+    "e2": {
+      "base": -780,
+      "rail": 12508,
+      "winch": 7874
+    },
+    "f2": {
+      "base": -967,
+      "rail": 11499,
+      "winch": 7895
+    },
+    "g2": {
+      "base": -1174,
+      "rail": 10630,
+      "winch": 7914
+    },
+    "h2": {
+      "base": -1402,
+      "rail": 9919,
+      "winch": 7929
+    },
+    "a3": {
+      "base": -90,
+      "rail": 16336,
+      "winch": 7792
+    },
+    "b3": {
+      "base": -208,
+      "rail": 14869,
+      "winch": 7823
+    },
+    "c3": {
+      "base": -340,
+      "rail": 13470,
+      "winch": 7853
+    },
+    "d3": {
+      "base": -491,
+      "rail": 12156,
+      "winch": 7881
+    },
+    "e3": {
+      "base": -662,
+      "rail": 10942,
+      "winch": 7907
+    },
+    "f3": {
+      "base": -856,
+      "rail": 9848,
+      "winch": 7930
+    },
+    "g3": {
+      "base": -1075,
+      "rail": 8897,
+      "winch": 7951
+    },
+    "h3": {
+      "base": -1320,
+      "rail": 8114,
+      "winch": 7967
+    },
+    "a4": {
+      "base": 40,
+      "rail": 15180,
+      "winch": 7817
+    },
+    "b4": {
+      "base": -73,
+      "rail": 13637,
+      "winch": 7850
+    },
+    "c4": {
+      "base": -202,
+      "rail": 12156,
+      "winch": 7881
+    },
+    "d4": {
+      "base": -351,
+      "rail": 10753,
+      "winch": 7911
+    },
+    "e4": {
+      "base": -524,
+      "rail": 9445,
+      "winch": 7939
+    },
+    "f4": {
+      "base": -724,
+      "rail": 8254,
+      "winch": 7964
+    },
+    "g4": {
+      "base": -954,
+      "rail": 7208,
+      "winch": 7987
+    },
+    "h4": {
+      "base": -1218,
+      "rail": 6337,
+      "winch": 8005
+    },
+    "a5": {
+      "base": 182,
+      "rail": 14128,
+      "winch": 7839
+    },
+    "b5": {
+      "base": 76,
+      "rail": 12508,
+      "winch": 7874
+    },
+    "c5": {
+      "base": -47,
+      "rail": 10942,
+      "winch": 7907
+    },
+    "d5": {
+      "base": -192,
+      "rail": 9445,
+      "winch": 7939
+    },
+    "e5": {
+      "base": -362,
+      "rail": 8035,
+      "winch": 7969
+    },
+    "f5": {
+      "base": -565,
+      "rail": 6736,
+      "winch": 7997
+    },
+    "g5": {
+      "base": -804,
+      "rail": 5579,
+      "winch": 8021
+    },
+    "h5": {
+      "base": -1087,
+      "rail": 4600,
+      "winch": 8042
+    },
+    "a6": {
+      "base": 336,
+      "rail": 13194,
+      "winch": 7859
+    },
+    "b6": {
+      "base": 239,
+      "rail": 11499,
+      "winch": 7895
+    },
+    "c6": {
+      "base": 125,
+      "rail": 9848,
+      "winch": 7930
+    },
+    "d6": {
+      "base": -10,
+      "rail": 8254,
+      "winch": 7964
+    },
+    "e6": {
+      "base": -174,
+      "rail": 6736,
+      "winch": 7997
+    },
+    "f6": {
+      "base": -373,
+      "rail": 5317,
+      "winch": 8027
+    },
+    "g6": {
+      "base": -618,
+      "rail": 4031,
+      "winch": 8054
+    },
+    "h6": {
+      "base": -918,
+      "rail": 2922,
+      "winch": 8078
+    },
+    "a7": {
+      "base": 501,
+      "rail": 12395,
+      "winch": 7876
+    },
+    "b7": {
+      "base": 416,
+      "rail": 10630,
+      "winch": 7914
+    },
+    "c7": {
+      "base": 316,
+      "rail": 8897,
+      "winch": 7951
+    },
+    "d7": {
+      "base": 194,
+      "rail": 7208,
+      "winch": 7987
+    },
+    "e7": {
+      "base": 44,
+      "rail": 5579,
+      "winch": 8021
+    },
+    "f7": {
+      "base": -144,
+      "rail": 4031,
+      "winch": 8054
+    },
+    "g7": {
+      "base": -385,
+      "rail": 2599,
+      "winch": 8085
+    },
+    "h7": {
+      "base": -695,
+      "rail": 1333,
+      "winch": 8112
+    },
+    "a8": {
+      "base": 675,
+      "rail": 11746,
+      "winch": 7890
+    },
+    "b8": {
+      "base": 606,
+      "rail": 9919,
+      "winch": 7929
+    },
+    "c8": {
+      "base": 523,
+      "rail": 8114,
+      "winch": 7967
+    },
+    "d8": {
+      "base": 421,
+      "rail": 6337,
+      "winch": 8005
+    },
+    "e8": {
+      "base": 293,
+      "rail": 4600,
+      "winch": 8042
+    },
+    "f8": {
+      "base": 128,
+      "rail": 2922,
+      "winch": 8078
+    },
+    "g8": {
+      "base": -92,
+      "rail": 1333,
+      "winch": 8112
+    },
+    "h8": {
+      "base": -396,
+      "rail": -119,
+      "winch": 8143
+    }
+  },
+  "predicted_model": {
+    "note": "AUXILIARY cross-check, generated by scripts/predictmap.py. Not read by the game; anchors/table are authoritative.",
+    "source_map": "bestmap.json",
+    "reject_sigma": 3.0,
+    "axes": {
+      "base": {
+        "formula": "base = -430.4885 +38.5619*Theta -0.0642*Theta^2 +0.2904*R",
+        "coeffs": [
+          -430.4884545972207,
+          38.56186160541924,
+          -0.06418298109179368,
+          0.2903723962797093
+        ],
+        "anchors_used": 29,
+        "in_sample_rms": 36.13,
+        "leave_one_out_rms": 40.61,
+        "rejected": {}
+      },
+      "rail": {
+        "formula": "rail = -8660.9836 +71.1774*R",
+        "coeffs": [
+          -8660.98362687352,
+          71.17736807608217
+        ],
+        "anchors_used": 27,
+        "in_sample_rms": 225.31,
+        "leave_one_out_rms": 397.93,
+        "rejected": {
+          "g2": 1227.7,
+          "a1": 907.2
+        }
+      },
+      "winch": {
+        "formula": "winch = +8324.6312 -1.5164*R",
+        "coeffs": [
+          8324.631247358286,
+          -1.516420234529194
+        ],
+        "anchors_used": 28,
+        "in_sample_rms": 46.5,
+        "leave_one_out_rms": 67.62,
+        "rejected": {
+          "b3": 224.9
+        }
+      }
+    }
   }
 }
