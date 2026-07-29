@@ -50,13 +50,17 @@ _CHESS_STT_PROMPT = (
 
 @dataclass
 class SttConfig:
-    backend: str = "distil_whisper"          # distil_whisper | esp32_whisper | stdin
+    backend: str = "distil_whisper"          # distil_whisper | esp32_whisper | network_whisper | stdin
     model: str = "distil-small.en"          # faster-whisper alias -> CTranslate2 build
     device: str = "cpu"                      # cpu | cuda | auto
     compute_type: str = "int8"               # int8 is fast on the Pi 5 CPU
     language: str = "en"
     beam_size: int = 1
     prompt: str = _CHESS_STT_PROMPT          # bias Whisper toward chess vocab (no NATO needed)
+    # network_whisper only: an HTTP/RTSP audio stream (e.g. the IP Webcam app on a
+    # phone, http://<phone-ip>:8080/audio.opus). Opened per listen window via PyAV.
+    stream_url: str = ""
+    stream_timeout_s: float = 5.0            # network open/read timeout before giving up a window
 
 
 @dataclass

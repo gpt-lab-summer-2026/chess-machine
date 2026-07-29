@@ -23,7 +23,8 @@ audio:
     silence_ms: 800         # trailing silence that ends an utterance
 
 stt:
-  backend: esp32_whisper    # esp32_whisper (MAX4466 over serial) | distil_whisper (local mic) | stdin (dev)
+  backend: network_whisper  # network_whisper (phone over WiFi) | esp32_whisper (MAX4466 serial) | distil_whisper (local mic) | stdin (dev)
+  stream_url: http://172.20.10.3:8080/audio.opus  # OnePlus IP Webcam over the iPhone hotspot
   model: distil-small.en    # faster-whisper alias -> CTranslate2 (use distil-medium.en for accuracy)
   device: cpu
   compute_type: int8

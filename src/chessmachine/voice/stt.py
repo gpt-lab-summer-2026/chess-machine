@@ -81,4 +81,9 @@ def create_stt(stt_cfg: SttConfig, audio_cfg: AudioConfig, motion=None) -> STT:
                              "(set motion.backend: serial)")
         from .esp32_mic import MotionMicCapture
         return DistilWhisperSTT(stt_cfg, audio_cfg, capture=MotionMicCapture(motion))
+    if stt_cfg.backend == "network_whisper":
+        # Same Whisper model, but the mic is a network stream (e.g. a phone
+        # running IP Webcam over WiFi), pulled per-window via PyAV.
+        from .network_mic import NetworkMicCapture
+        return DistilWhisperSTT(stt_cfg, audio_cfg, capture=NetworkMicCapture(stt_cfg, audio_cfg))
     raise ValueError(f"Unknown stt backend: {stt_cfg.backend!r}")
