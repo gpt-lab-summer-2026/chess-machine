@@ -43,6 +43,8 @@ Commands:
   load <path>     load anchors from a saved map file (to re-fit / add more)
   map             fit the spline over ALL anchors; print deltas, sag, leave-one-out error
   goto <sq>       drive to <sq>'s fitted base/rail (verify)
+  pawns [n]       physical test: push every pawn fwd one rank x2 (2->3->4, 7->6->5),
+                  re-homing every n transfers (default 6). Set up pawns on ranks 2 & 7.
   seek            measure the base limit-switch offset -> A_ENDSTOP_STEPS (HOME first)
   mag on|off      electromagnet
   home | pos | save [path] | estop | quit
@@ -59,6 +61,7 @@ import math
 import pathlib
 import re
 import sys
+import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
@@ -304,6 +307,60 @@ class StepMap:
         self.anchors = loaded
         print(f"   loaded {len(loaded)} anchors from {path}: {' '.join(sorted(loaded))}")
 
+    # -- physical test loop -------------------------------------------------- #
+    def pawn_sweep(self, rehome_every: int = 6) -> None:
+        """Physical shakedown: push every pawn forward one rank, TWICE, driving the
+        fitted map and re-homing every `rehome_every` transfers exactly like gameplay.
+        Loop 1: White a2->a3 .. h2->h3, then Black a7->a6 .. h7->h6.
+        Loop 2: White a3->a4 .. h3->h4, then Black a6->a5 .. h6->h5.
+        Set up 8 White pawns on rank 2 and 8 Black on rank 7 first. Ctrl-C stops it."""
+        if not self.anchors:
+            self.load(self.cfg.motion.stepmap.map_path)   # fall back to the configured map
+        table = self.build()
+        if not table:
+            print("   no map to sweep — `load <file>` a step map first.")
+            return
+        dip = int(self.cfg.motion.magnet.pick_dip_steps)
+        hover_s = self.cfg.motion.magnet.hover_ms / 1000.0
+        loop1 = [(f + "2", f + "3") for f in FILES] + [(f + "7", f + "6") for f in FILES]
+        loop2 = [(f + "3", f + "4") for f in FILES] + [(f + "6", f + "5") for f in FILES]
+        seq = loop1 + loop2
+        print(f"   pawn sweep: {len(seq)} transfers, re-home every {rehome_every} "
+              f"(dip={dip}, hover={hover_s:.1f}s). Ctrl-C to stop.")
+        done = 0
+        try:
+            for src, dst in seq:
+                print(f"   [{done + 1}/{len(seq)}] {src} -> {dst}", flush=True)
+                self._transfer_squares(table[src], table[dst], dip, hover_s)
+                done += 1
+                if done % rehome_every == 0 and done < len(seq):
+                    print(f"   re-homing after {done} moves (as gameplay does)...", flush=True)
+                    self.ctl.home()
+        except KeyboardInterrupt:
+            print("\n   interrupted — releasing the magnet and raising the winch.")
+            self.ctl.magnet(False)
+            self.ctl.goto_steps(winch=0)
+            return
+        print(f"   pawn sweep complete ({done} transfers).")
+
+    def _transfer_squares(self, ts: dict, td: dict, dip: int, hover_s: float) -> None:
+        """One pick-and-place between two mapped squares, mirroring the gameplay
+        choreography: magnet ON before the dip and OFF only at the drop; a dip past
+        the pick depth on the PICK, none on the drop."""
+        self.ctl.goto_steps(winch=0)                           # ensure raised before travel
+        self.ctl.goto_steps(base=ts["base"], rail=ts["rail"])  # over the source pawn
+        self.ctl.magnet(True)                                  # energize (stays on until the drop)
+        if hover_s > 0:
+            time.sleep(hover_s)                                # hover a moment over the piece
+        self.ctl.goto_steps(winch=ts["winch"])                 # lower to the calibrated pick depth
+        if dip:
+            self.ctl.goto_steps(winch=ts["winch"] + dip)       # dip past it for sure contact (pick only)
+        self.ctl.goto_steps(winch=0)                           # lift to travel
+        self.ctl.goto_steps(base=td["base"], rail=td["rail"])  # carry to the destination
+        self.ctl.goto_steps(winch=td["winch"])                 # lower to the drop height (no dip)
+        self.ctl.magnet(False)                                 # release — the only magnet-off
+        self.ctl.goto_steps(winch=0)                           # lift to travel
+
 
 def _int(s: str | None) -> int:
     if s is None:
@@ -341,7 +398,7 @@ def main() -> int:
     if args.load:
         m.load(args.load)
     print("Commands: a/r/w <n> | wtop | pos | set <sq> | anchors | del <sq> | load <path> | "
-          "map | goto <sq> | seek | mag on|off | home | save | quit")
+          "map | goto <sq> | pawns [n] | seek | mag on|off | home | save | quit")
 
     try:
         for line in _prompt():
@@ -374,6 +431,8 @@ def main() -> int:
                     m.report()
                 elif c == "goto" and arg:
                     m.goto(arg)
+                elif c == "pawns":
+                    m.pawn_sweep(int(arg) if arg else 6)
                 elif c in ("seek", "findsw"):
                     off = m.ctl.seek_base_switch()
                     print(f"   base limit switch at {off} steps from home -> bake "
