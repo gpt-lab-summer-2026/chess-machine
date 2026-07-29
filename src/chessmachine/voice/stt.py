@@ -68,22 +68,31 @@ class DistilWhisperSTT(STT):
         return text
 
 
-def create_stt(stt_cfg: SttConfig, audio_cfg: AudioConfig, motion=None) -> STT:
-    if stt_cfg.backend == "stdin":
-        return StdinSTT()
+def create_capture(stt_cfg: SttConfig, audio_cfg: AudioConfig, motion=None):
+    """Build the mic for a whisper backend: any object with
+    `record_utterance() -> 16 kHz float32`. Every backend shares the same Whisper
+    model and only differs in where the audio comes from.
+    """
     if stt_cfg.backend == "distil_whisper":
-        return DistilWhisperSTT(stt_cfg, audio_cfg)
+        from .audio import AudioCapture  # local mic via sounddevice (USB / built-in)
+        return AudioCapture(audio_cfg)
     if stt_cfg.backend == "esp32_whisper":
-        # Same Whisper model, but the mic is the MAX4466 on the ESP32, streamed
-        # over the motion controller's serial link (shared, turn-based).
+        # MAX4466 on the ESP32, streamed over the motion controller's serial
+        # link (shared port, turn-based: we never record while the crane moves).
         if motion is None:
             raise ValueError("esp32_whisper STT needs the serial motion controller "
                              "(set motion.backend: serial)")
         from .esp32_mic import MotionMicCapture
-        return DistilWhisperSTT(stt_cfg, audio_cfg, capture=MotionMicCapture(motion))
+        return MotionMicCapture(motion)
     if stt_cfg.backend == "network_whisper":
-        # Same Whisper model, but the mic is a network stream (e.g. a phone
-        # running IP Webcam over WiFi), pulled per-window via PyAV.
+        # A phone streaming over WiFi (e.g. IP Webcam), pulled per-window via PyAV.
         from .network_mic import NetworkMicCapture
-        return DistilWhisperSTT(stt_cfg, audio_cfg, capture=NetworkMicCapture(stt_cfg, audio_cfg))
+        return NetworkMicCapture(stt_cfg, audio_cfg)
     raise ValueError(f"Unknown stt backend: {stt_cfg.backend!r}")
+
+
+def create_stt(stt_cfg: SttConfig, audio_cfg: AudioConfig, motion=None) -> STT:
+    if stt_cfg.backend == "stdin":
+        return StdinSTT()
+    return DistilWhisperSTT(stt_cfg, audio_cfg,
+                            capture=create_capture(stt_cfg, audio_cfg, motion))

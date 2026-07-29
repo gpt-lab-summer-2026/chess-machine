@@ -11,9 +11,10 @@ it answers). Drop-in for the sounddevice `AudioCapture` in `DistilWhisperSTT`.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any
 
-from ..config import AudioConfig, SttConfig, VadConfig
+from ..config import AudioConfig, SttConfig
+from .audio import collect_utterance  # the one shared end-of-utterance state machine
 
 if TYPE_CHECKING:
     import numpy as np
@@ -21,50 +22,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _DST_RATE = 16000  # Whisper wants 16 kHz mono
-
-
-def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
-                      sr: int = _DST_RATE) -> "np.ndarray":
-    """VAD-gate a stream of fixed-size int16 mono frames into one utterance.
-
-    `frames` yields `frame_len`-sample int16 numpy arrays (frame_len = sr *
-    frame_ms / 1000). `vad.is_speech(bytes, sr)` classifies each. Returns 16 kHz
-    float32 in [-1, 1] — empty if too little speech was heard. This is the pure
-    state machine (no I/O) so it can be unit-tested with a fake VAD; the network
-    decode path just feeds it. Mirrors `AudioCapture._record_vad`.
-    """
-    import numpy as np
-
-    frame_ms = vad_cfg.frame_ms
-    silence_frames = max(1, int(vad_cfg.silence_ms / frame_ms))
-    collected: list[np.ndarray] = []
-    triggered = False
-    num_silent = 0
-    speech_frames = 0
-
-    for chunk in frames:
-        is_speech = vad.is_speech(chunk.tobytes(), sr)
-        if not triggered:
-            if is_speech:
-                triggered = True
-                collected.append(chunk)
-                speech_frames += 1
-        else:
-            collected.append(chunk)
-            if is_speech:
-                speech_frames += 1
-                num_silent = 0
-            else:
-                num_silent += 1
-            if num_silent >= silence_frames:
-                break
-
-    # Reject blips: a click can trip the VAD for a frame or two. Require a
-    # minimum amount of actual speech before we bother transcribing.
-    if not collected or speech_frames * frame_ms < vad_cfg.min_speech_ms:
-        return np.zeros(0, dtype="float32")
-    pcm = np.concatenate(collected)
-    return (pcm.astype("float32") / 32768.0)
 
 
 class NetworkMicCapture:
@@ -80,7 +37,7 @@ class NetworkMicCapture:
         self.timeout_s = stt_cfg.stream_timeout_s
         self.vad_cfg = audio_cfg.vad
 
-    def record_utterance(self) -> "np.ndarray":
+    def record_utterance(self) -> np.ndarray:
         import numpy as np
 
         if not self.url:
@@ -91,10 +48,9 @@ class NetworkMicCapture:
             return self._capture()
         except Exception as exc:  # noqa: BLE001 - degrade gracefully like the other captures
             log.warning("network mic: capture from %s failed (%s)", self.url, exc)
-            import numpy as np
             return np.zeros(0, dtype="float32")
 
-    def _capture(self) -> "np.ndarray":
+    def _capture(self) -> np.ndarray:
         import av
         from av.audio.resampler import AudioResampler
 

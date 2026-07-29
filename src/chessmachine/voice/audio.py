@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import logging
 import shutil
-from typing import TYPE_CHECKING
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
-from ..config import AudioConfig
+from ..config import AudioConfig, VadConfig
 
 if TYPE_CHECKING:
     import numpy as np
@@ -21,6 +22,53 @@ log = logging.getLogger(__name__)
 # start of a fresh utterance ("Chess machine ready" -> "ess machine ready"). We
 # prepend this much silence to each pw-play so only silence is lost, never speech.
 _BT_LEAD_IN_S = 0.5
+
+
+def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
+                      sr: int = 16000) -> np.ndarray:
+    """VAD-gate a stream of fixed-size int16 mono frames into one utterance.
+
+    `frames` yields `frame_len`-sample int16 numpy arrays (frame_len = sr *
+    frame_ms / 1000); `vad.is_speech(bytes, sr)` classifies each. Waits for
+    speech to start, then ends after `silence_ms` of trailing silence. Returns
+    float32 in [-1, 1] — empty if too little actual speech was heard.
+
+    This is the ONE end-of-utterance state machine, shared by every mic backend
+    (local sounddevice, network stream): pure and I/O-free, so it is unit-tested
+    with a fake VAD and each backend only has to supply frames. Any per-window
+    cap (max_utterance_s) belongs to the frame producer.
+    """
+    import numpy as np
+
+    frame_ms = vad_cfg.frame_ms
+    silence_frames = max(1, int(vad_cfg.silence_ms / frame_ms))
+    collected: list[np.ndarray] = []
+    triggered = False
+    num_silent = 0
+    speech_frames = 0
+
+    for chunk in frames:
+        is_speech = vad.is_speech(chunk.tobytes(), sr)
+        if not triggered:
+            if is_speech:
+                triggered = True
+                collected.append(chunk)
+                speech_frames += 1
+        else:
+            collected.append(chunk)
+            if is_speech:
+                speech_frames += 1
+                num_silent = 0
+            else:
+                num_silent += 1
+            if num_silent >= silence_frames:
+                break
+
+    # Reject blips: a click can trip the VAD for a frame or two. Require a
+    # minimum amount of actual speech before we bother transcribing.
+    if not collected or speech_frames * frame_ms < vad_cfg.min_speech_ms:
+        return np.zeros(0, dtype="float32")
+    return np.concatenate(collected).astype("float32") / 32768.0
 
 
 class AudioCapture:
@@ -35,52 +83,33 @@ class AudioCapture:
 
     # -- VAD-gated capture --------------------------------------------------- #
     def _record_vad(self) -> np.ndarray:
-        import numpy as np
+        """Open the mic and feed its frames to the shared `collect_utterance`
+        state machine (see there for the end-of-utterance rules)."""
         import sounddevice as sd
         import webrtcvad
 
         sr = self.cfg.sample_rate
-        frame_ms = self.cfg.vad.frame_ms
-        frame_len = int(sr * frame_ms / 1000)          # samples per frame
-        silence_frames = int(self.cfg.vad.silence_ms / frame_ms)
-        max_frames = int(self.cfg.vad.max_utterance_s * 1000 / frame_ms)
-
+        frame_len = int(sr * self.cfg.vad.frame_ms / 1000)   # samples per frame
         vad = webrtcvad.Vad(self.cfg.vad.aggressiveness)
-        collected: list[bytes] = []
-        triggered = False
-        num_silent = 0
-        speech_frames = 0
 
         with sd.RawInputStream(samplerate=sr, channels=1, dtype="int16",
                                blocksize=frame_len, device=self.cfg.input_device) as stream:
             log.debug("Listening (VAD)...")
-            for _ in range(max_frames):
-                buf, _overflowed = stream.read(frame_len)
-                frame = bytes(buf)
-                if len(frame) < frame_len * 2:
-                    continue
-                is_speech = vad.is_speech(frame, sr)
-                if not triggered:
-                    if is_speech:
-                        triggered = True
-                        collected.append(frame)
-                        speech_frames += 1
-                else:
-                    collected.append(frame)
-                    if is_speech:
-                        speech_frames += 1
-                        num_silent = 0
-                    else:
-                        num_silent += 1
-                    if num_silent >= silence_frames:
-                        break
+            frames = self._iter_frames(stream, frame_len)
+            return collect_utterance(frames, vad, self.cfg.vad, sr)
 
-        # Reject blips: a click or stray noise can trip the VAD for a frame or two.
-        # Require a minimum amount of actual speech before we bother transcribing.
-        if speech_frames * frame_ms < self.cfg.vad.min_speech_ms:
-            return np.zeros(0, dtype=np.float32)
-        pcm = np.frombuffer(b"".join(collected), dtype=np.int16)
-        return (pcm.astype(np.float32) / 32768.0)
+    def _iter_frames(self, stream: Any, frame_len: int):
+        """Yield int16 mono frames from an open input stream, capped at
+        `max_utterance_s` so a caller who never stops talking still returns."""
+        import numpy as np
+
+        max_frames = int(self.cfg.vad.max_utterance_s * 1000 / self.cfg.vad.frame_ms)
+        for _ in range(max_frames):
+            buf, _overflowed = stream.read(frame_len)
+            frame = bytes(buf)
+            if len(frame) < frame_len * 2:       # short read: skip the partial frame
+                continue
+            yield np.frombuffer(frame, dtype="<i2")
 
     # -- fixed-duration capture (VAD disabled) ------------------------------- #
     def _record_fixed(self, seconds: float) -> np.ndarray:
