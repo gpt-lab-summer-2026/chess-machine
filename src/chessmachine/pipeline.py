@@ -70,6 +70,10 @@ class ChessMachine:
         self._pending: str | None = None   # a destructive action awaiting confirmation
         self._moves_since_home = 0         # finished machine moves since the last re-home (cadence)
         self._last_prompt_ply = -1         # ply we last spoke "Your move." at (one cue per human turn)
+        # Switch the status LED to "thinking" the instant the mic closes, rather than
+        # after whisper finishes (see DistilWhisperSTT.on_capture_done).
+        if hasattr(stt, "on_capture_done"):
+            stt.on_capture_done = lambda: self._led("blink")
         # A blunder/mistake the MACHINE just made, held back until we see whether
         # the opponent punishes it (C: only self-critique if it actually costs).
         self._pending_self_critique: dict | None = None
@@ -99,7 +103,9 @@ class ChessMachine:
                 # The user's clock runs only while we wait for their input — all
                 # machine work (STT/SLM/actuation/speech) is off their clock.
                 self.clock.start_user()
-                transcript = self.stt.listen()
+                self._led("on")               # solid = mic is open, speak now
+                transcript = self.stt.listen()  # on_capture_done -> "blink" mid-call
+                self._led("blink")            # (idempotent) blinking = working on it
                 self.clock.stop_user()
                 if not transcript:
                     continue
@@ -131,6 +137,21 @@ class ChessMachine:
             self.choreo.park()
         except Exception:  # noqa: BLE001 - recovery must never raise
             log.exception("Failed to park after an error")
+
+    def _led(self, mode: str) -> None:
+        """Set the status LED: 'on' = listening, 'blink' = thinking, 'off' = moving.
+
+        Best-effort by design — backends without an LED (mock, relay) simply have no
+        `led()`, and the serial one swallows unsupported firmware. A status light must
+        never be able to interrupt a game.
+        """
+        fn = getattr(getattr(self.choreo, "ctl", None), "led", None)
+        if fn is None:
+            return
+        try:
+            fn(mode)
+        except Exception:  # noqa: BLE001 - indicator only
+            log.debug("status LED %s failed", mode, exc_info=True)
 
     def _prompt_move_if_new_turn(self) -> None:
         """Speak "Your move." once at the start of each human turn, right before
@@ -409,6 +430,10 @@ class ChessMachine:
         crane carries the piece while we compute and speak the explanation —
         the captured piece (if any) is always cleared first. Speaks internally."""
         board_before = self.game.board.copy()
+        # LED off for the whole actuation: hands off the board while the crane runs.
+        # Sent BEFORE the first motion command, because a blocking GOTO holds the
+        # serial link and we could not update the LED mid-move.
+        self._led("off")
         # Whose move this is (the side to move vs. the machine's colour). The
         # relay prototype uses it to pick a motor direction; the crane ignores it.
         mover_is_machine = board_before.turn == self.game.machine_color

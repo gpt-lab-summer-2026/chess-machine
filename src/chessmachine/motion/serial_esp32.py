@@ -134,6 +134,22 @@ class SerialMotion(MotionController):
     def magnet(self, on: bool) -> None:
         self._command(f"MAG {'ON' if on else 'OFF'}")
 
+    def led(self, mode: str) -> None:
+        """Status LED on the ESP32: 'on' (listening), 'blink' (thinking), 'off' (moving).
+
+        Best-effort and self-disabling: firmware built before the LED command answers
+        `ERR unknown command`, so the first failure logs once and every later call is
+        a no-op. An indicator must never take the game down.
+        """
+        if getattr(self, "_led_unsupported", False):
+            return
+        try:
+            self._command(f"LED {mode.upper()}")
+        except Exception as exc:  # noqa: BLE001 - indicator only
+            self._led_unsupported = True
+            log.warning("ESP32 LED not available (%s) — reflash firmware/esp32_chess "
+                        "for the status LED; continuing without it", exc)
+
     def estop(self) -> None:
         self._command("ESTOP", expect="ESTOP")
 

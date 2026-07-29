@@ -47,6 +47,11 @@ class DistilWhisperSTT(STT):
             from .audio import AudioCapture
             capture = AudioCapture(audio_cfg)
         self.capture = capture
+        # Optional hook fired the moment the mic CLOSES, before transcription. The
+        # pipeline uses it to switch the status LED from "listening" to "thinking":
+        # whisper takes a few seconds on the Pi, and without this the light would
+        # still say "speak now" while the mic was already shut.
+        self.on_capture_done = None
 
     def transcribe(self, samples) -> str:
         if samples is None or len(samples) == 0:
@@ -61,6 +66,11 @@ class DistilWhisperSTT(STT):
 
     def listen(self) -> str:
         samples = self.capture.record_utterance()
+        if self.on_capture_done is not None:
+            try:
+                self.on_capture_done()
+            except Exception:  # noqa: BLE001 - a UI hook must not break listening
+                log.debug("on_capture_done hook failed", exc_info=True)
         text = self.transcribe(samples)
         log.info("STT: %r", text)
         if text:

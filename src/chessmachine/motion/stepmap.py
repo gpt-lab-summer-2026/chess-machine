@@ -53,6 +53,10 @@ class StepMapMotion(MotionController):
     def close(self) -> None:
         self._inner.close()
 
+    def led(self, mode: str) -> None:
+        """Delegate the status LED to the wrapped transport."""
+        self._inner.led(mode)
+
     @property
     def serial(self):
         """Live pyserial handle from the wrapped transport, so the esp32_whisper

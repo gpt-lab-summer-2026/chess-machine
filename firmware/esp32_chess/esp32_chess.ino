@@ -69,6 +69,25 @@
 #define MAGNET_PIN 19  // relay "1" for the electromagnet     [single relay]
 #define A_ENDSTOP_PIN 16  // base limit switch -> GND (INPUT_PULLUP). Active (a8 / hard stop) = LOW.
 
+// ================ EDIT: status LED ===========================================
+// Tells the player what the machine is doing: SOLID = listening (speak now),
+// BLINKING = thinking (STT/SLM/engine), OFF = moving (hands off the board).
+// Driven by the Pi via "LED ON|BLINK|OFF"; the blink runs autonomously here
+// (ledTick in loop) because the Pi is busy during a think and BLOCKED on serial
+// during a move, so it cannot toggle the LED itself at those times.
+//
+// GPIO12 IS A STRAPPING PIN (MTDI): if it is held HIGH at reset the ESP32 selects
+// a 1.8 V flash voltage and may fail to boot. Wire the LED ACTIVE-HIGH --
+// GPIO12 -> resistor -> LED -> GND -- so the pin is low at boot. Do NOT add a
+// pull-up / do not wire it to 3V3 through the LED.
+#define LED_PIN 12
+const bool LED_ACTIVE_LOW = false;           // false = GPIO12 -> R -> LED -> GND (boot-safe)
+const unsigned long LED_BLINK_MS = 300;      // half-period while thinking
+enum LedMode { LED_MODE_OFF = 0, LED_MODE_ON, LED_MODE_BLINK };
+LedMode g_ledMode = LED_MODE_OFF;
+bool g_ledOn = false;
+unsigned long g_ledLast = 0;
+
 // ================ EDIT: microphone (MAX4466 analog -> GPIO34 / ADC1_CH6) ======
 // GPIO34 is INPUT-ONLY (fine for a mic) and on ADC1, so — unlike ADC2 — it never
 // conflicts with anything else here. Pi-driven: on "LISTEN" we stream audio
@@ -138,7 +157,7 @@ const long A_HOME_BACKOFF_STEPS = 200;    // release + slow re-approach for a re
 // as before). MEASURE it once: power on at centerline, HOME, then run `SEEK` (or the
 // anchor/tune `seek` command) — it reports the number. Bake it here + reflash; also
 // settable live via `CAL AEND <n>`.
-const long A_ENDSTOP_STEPS = 956;           // 0 until measured (keeps the old count-home behavior)
+const long A_ENDSTOP_STEPS = 0;           // 0 until measured (keeps the old count-home behavior)
 
 // ================ EDIT: soft limits & homing =================================
 // R is the CART's radial position from the pivot. The INNER stop is home (= r_min);
@@ -553,6 +572,30 @@ void doSeekSwitch() {
   replyOK(buf);
 }
 
+// --------------------------- status LED ---------------------------------------
+void ledWrite(bool on) {
+  g_ledOn = on;
+  digitalWrite(LED_PIN, (on != LED_ACTIVE_LOW) ? HIGH : LOW);
+}
+
+void ledSet(LedMode m) {
+  g_ledMode = m;
+  g_ledLast = millis();
+  ledWrite(m == LED_MODE_ON);      // BLINK starts dark; ledTick drives it
+}
+
+// Non-blocking: called from loop(), so a blink keeps running while the Pi thinks.
+// Motor moves are blocking loops, so the LED simply holds its state there — which
+// is exactly what we want, since "moving" is the OFF state anyway.
+void ledTick() {
+  if (g_ledMode != LED_MODE_BLINK) return;
+  unsigned long now = millis();
+  if (now - g_ledLast >= LED_BLINK_MS) {
+    g_ledLast = now;
+    ledWrite(!g_ledOn);
+  }
+}
+
 // --------------------------- command dispatch --------------------------------
 void handleLine(char* line) {
   char* cmd = strtok(line, " ");  // g_argline still holds the full clean line
@@ -575,6 +618,15 @@ void handleLine(char* line) {
     doEstop();
   } else if (!strcmp(cmd, "CAL")) {
     doCal();  // set/report live calibration (allowed even when estopped)
+  } else if (!strcmp(cmd, "LED")) {
+    // Status LED: ON = listening, BLINK = thinking, OFF = moving. Above the estop
+    // guard on purpose — it is only an indicator, and you still want to see state
+    // while estopped.
+    char* arg = strtok(nullptr, " ");
+    if (arg && !strcmp(arg, "ON")) { ledSet(LED_MODE_ON); replyOK(); }
+    else if (arg && !strcmp(arg, "OFF")) { ledSet(LED_MODE_OFF); replyOK(); }
+    else if (arg && !strcmp(arg, "BLINK")) { ledSet(LED_MODE_BLINK); replyOK(); }
+    else replyErr("LED expects ON, OFF or BLINK");
   } else if (g_estopped) {
     replyErr("estopped; send HOME to clear");
   } else if (!strcmp(cmd, "MOVE")) {
@@ -714,6 +766,8 @@ void setup() {
   pinMode(A_IN4, OUTPUT);
   pinMode(A_ENDSTOP_PIN, INPUT_PULLUP);  // base limit switch to GND (a8 / hard stop)
   pinMode(MIC_PIN, INPUT);               // MAX4466 analog mic (ADC1, input-only pin)
+  pinMode(LED_PIN, OUTPUT);              // status LED (GPIO12: strapping pin, keep low at boot)
+  ledSet(LED_MODE_OFF);                  // dark until the Pi says otherwise
 
   railRelease();   // rail coils off
   winchRelease();  // winch coils off
@@ -725,6 +779,8 @@ void setup() {
 }
 
 void loop() {
+  ledTick();   // drive a BLINK while we sit idle waiting for the Pi's next command
+
   // Serial command handling.
   while (Serial.available()) {
     char c = (char)Serial.read();
