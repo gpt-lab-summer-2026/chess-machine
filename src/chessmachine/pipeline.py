@@ -69,6 +69,7 @@ class ChessMachine:
         self._last_spoken = ""
         self._pending: str | None = None   # a destructive action awaiting confirmation
         self._moves_since_home = 0         # finished machine moves since the last re-home (cadence)
+        self._last_prompt_ply = -1         # ply we last spoke "Your move." at (one cue per human turn)
         # A blunder/mistake the MACHINE just made, held back until we see whether
         # the opponent punishes it (C: only self-critique if it actually costs).
         self._pending_self_critique: dict | None = None
@@ -92,6 +93,9 @@ class ChessMachine:
     def run(self) -> None:
         try:
             while True:
+                # Cue "Your move." right before we open the mic, so the prompt
+                # finishes speaking just as recording begins (once per human turn).
+                self._prompt_move_if_new_turn()
                 # The user's clock runs only while we wait for their input — all
                 # machine work (STT/SLM/actuation/speech) is off their clock.
                 self.clock.start_user()
@@ -127,6 +131,21 @@ class ChessMachine:
             self.choreo.park()
         except Exception:  # noqa: BLE001 - recovery must never raise
             log.exception("Failed to park after an error")
+
+    def _prompt_move_if_new_turn(self) -> None:
+        """Speak "Your move." once at the start of each human turn, right before
+        we open the mic, so the cue finishes just as recording begins. Skipped
+        when a yes/no confirmation is pending, the game is over, or it's the
+        machine's turn; and only once per turn, so back-to-back questions during
+        the same turn don't re-trigger it."""
+        if (self._pending is not None or self.game.is_game_over()
+                or self.game.is_machine_turn()):
+            return
+        ply = len(self.game.board.move_stack)
+        if ply == self._last_prompt_ply:
+            return
+        self._last_prompt_ply = ply
+        self._say("Your move.")
 
     # -- top-level dispatch -------------------------------------------------- #
     def handle(self, transcript: str) -> str:

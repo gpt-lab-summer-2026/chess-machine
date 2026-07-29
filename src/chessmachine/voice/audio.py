@@ -17,6 +17,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# A Bluetooth sink wakes from idle with ~0.3-0.5 s of latency, which clips the
+# start of a fresh utterance ("Chess machine ready" -> "ess machine ready"). We
+# prepend this much silence to each pw-play so only silence is lost, never speech.
+_BT_LEAD_IN_S = 0.5
+
 
 class AudioCapture:
     def __init__(self, cfg: AudioConfig):
@@ -125,6 +130,11 @@ def _play_via_pipewire(pw_play: str, samples: np.ndarray, sample_rate: int) -> N
     if arr.dtype != np.int16:                     # Kokoro emits float32 in [-1, 1]
         arr = (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2")
     channels = 1 if arr.ndim == 1 else arr.shape[1]
+
+    lead = int(sample_rate * _BT_LEAD_IN_S)       # silence so the BT wake-up clips nothing
+    if lead > 0:
+        pad = np.zeros((lead,) if arr.ndim == 1 else (lead, channels), dtype="<i2")
+        arr = np.concatenate([pad, arr])
 
     fd, path = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
