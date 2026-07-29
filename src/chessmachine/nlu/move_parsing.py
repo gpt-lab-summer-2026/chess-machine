@@ -26,6 +26,17 @@ _PIECE_WORDS = {
     "king": chess.KING, "queen": chess.QUEEN, "rook": chess.ROOK,
     "bishop": chess.BISHOP, "knight": chess.KNIGHT, "horse": chess.KNIGHT,
     "pawn": chess.PAWN,
+    # STT homophones. Whisper writes "knight" as "night" almost every time, and
+    # without this the piece word is lost: the utterance degrades to a bare square
+    # ("night to f3" -> "f3"), which then matches BOTH Nf3 and the f3 pawn push, so
+    # the move comes back ambiguous instead of playing. Plurals included because
+    # whisper also produces "nights"/"knights".
+    "night": chess.KNIGHT, "nights": chess.KNIGHT, "knights": chess.KNIGHT,
+    "nite": chess.KNIGHT, "horsey": chess.KNIGHT,
+    "kings": chess.KING, "queens": chess.QUEEN, "rooks": chess.ROOK,
+    "bishops": chess.BISHOP, "pawns": chess.PAWN,
+    "rock": chess.ROOK,                            # "rook" -> "rock"
+    "prawn": chess.PAWN, "porn": chess.PAWN,       # "pawn" mishearings
 }
 _PROMO_DEFAULT = chess.QUEEN
 _SQUARE_RE = re.compile(r"[a-h][1-8]")
