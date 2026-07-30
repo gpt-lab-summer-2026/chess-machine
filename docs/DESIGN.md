@@ -99,12 +99,12 @@ stays well inside the ±55° firmware limit.
 lifted to storage *first*, then the capturing piece moves
 ([choreography.py](../src/chessmachine/motion/choreography.py) `execute_move`).
 
-**Storage capacity caveat.** 16 slots is enough for a typical game's captures,
-but a full **board reset needs 32 transient slots**. With 16, the machine reports
-"not enough storage to auto-reset; reset by hand" rather than failing — so "new
-game" with the default geometry is a manual re-setup. For automatic resets, widen
-the sweep and add a second pair of arcs (more `graveyard_slots_per_side`, or a
-second radius) — there is room in the side wedges at larger angles.
+**One-way dish caveat.** Captured pieces are dumped into a single dish and pile up
+randomly, so they can't be individually retrieved (`graveyard_retrievable: false`).
+Promotion (no spare to fetch), undo of a capture, and "new game" reset therefore ask
+you to place the affected pieces by hand rather than the crane fishing them out. The
+dish holds `graveyard_capacity` (default 30) before a capture is refused — enough for
+any game's total captures.
 
 ### 4.2 Magnetics — is a ≤10 mm piece magnet workable?
 

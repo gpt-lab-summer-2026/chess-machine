@@ -27,7 +27,8 @@ def build_choreographer(cfg: MotionConfig) -> "Choreographer | RelayChoreographe
         # DC-motor prototype: no geometry/storage, just a directional pulse per move.
         return RelayChoreographer(controller, cfg.relay.pulse_ms)
     geometry = BoardGeometry(cfg.geometry)
-    graveyard = Graveyard(geometry.graveyard_slots())
+    graveyard = Graveyard(geometry.graveyard_slots(),
+                          retrievable=cfg.geometry.graveyard_retrievable)
     return Choreographer(controller, geometry, graveyard, cfg.speeds, cfg.magnet)
 
 

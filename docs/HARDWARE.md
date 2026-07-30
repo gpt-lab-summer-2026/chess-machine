@@ -64,12 +64,14 @@ sends `MOVE R… A…`. Nothing above the transport knows the machine is a crane
 
 ### Graveyard
 
-Slots sit on **two symmetric arcs** at `graveyard_radius_mm` (293 mm) at angles
-**beyond the board's ~±32° diagonal sweep** (37–52°) so they clear the board
-(**TODO: proper rework for the diagonal layout**), spread between
-`graveyard_inner_deg` and `graveyard_outer_deg` on each side of the bisector. The default `graveyard_slots_per_side = 8` gives **16 slots**. A
-full board reset needs 32 transient slots, so with 16 the machine asks for a
-manual reset. See [DESIGN.md §4.1](DESIGN.md).
+Captured pieces are **dumped into a single circular dish** on the h1/−θ side (the
+a8/+θ side is blocked by the base limit switch). The dish sits at
+`graveyard_center_r_mm` / `graveyard_center_deg` (**more negative = further off the
+board's g/h edge** — the one tuning knob), and drops scatter within
+`graveyard_jitter_mm` of the centre so they don't all stack on one point. Pieces
+**pile up randomly**, so the dish is **one-way** (`graveyard_retrievable: false`):
+the machine can't fish a specific piece back out, so promotion, undo, and reset ask
+you to place those pieces by hand. See [DESIGN.md §4.1](DESIGN.md).
 
 ## Calibration workflow
 

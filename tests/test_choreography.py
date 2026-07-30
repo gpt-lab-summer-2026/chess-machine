@@ -122,10 +122,10 @@ def test_reset_of_start_position_is_a_noop(rig):
 
 
 def test_reset_uses_on_board_pieces_directly(rig):
-    # The default 16-slot graveyard is plenty: misplaced pieces go straight to
-    # their home squares without being staged in storage.
+    # The dish holds plenty: misplaced pieces go straight to their home squares
+    # without being staged in storage.
     ctl, gy, ch, geo = rig
-    assert gy.capacity == 16
+    assert gy.capacity == 30
     b = chess.Board(); b.push_san("e4"); b.push_san("e5"); b.push_san("Nf3")
     notes = ch.setup_starting_position(b)
     assert notes == []
@@ -146,6 +146,21 @@ def test_reset_pulls_captured_pieces_back_from_the_graveyard(rig):
     assert gy.occupied() == 0                  # captured pawn returned to d7
     # white pawn d5 -> e2, black pawn graveyard -> d7 = 2 transfers = 4 moves
     assert len(ctl.moves()) == 4
+
+
+def test_dish_graveyard_is_not_retrievable():
+    # A dump dish piles pieces randomly, so retrieve() always fails: reversing a
+    # capture can't fish the piece back out and asks for a manual placement instead.
+    geo = BoardGeometry(GeometryConfig())
+    ctl = MockMotion(); ctl.connect()
+    gy = Graveyard(geo.graveyard_slots(), retrievable=False)
+    ch = Choreographer(ctl, geo, gy, SpeedsConfig(settle_ms=0), MagnetConfig(settle_ms=0))
+    b = chess.Board(); b.push_san("e4"); b.push_san("d5")
+    ch.execute_move(b, chess.Move.from_uci("e4d5"))
+    assert gy.occupied() == 1
+    report = ch.reverse_move(b, chess.Move.from_uci("e4d5"))
+    assert gy.occupied() == 1                       # NOT restored — can't retrieve from the pile
+    assert report.notes and "couldn't find" in report.notes[0].lower()
 
 
 def test_capture_with_full_storage_aborts_cleanly(rig):

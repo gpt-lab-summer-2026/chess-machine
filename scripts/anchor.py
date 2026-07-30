@@ -375,6 +375,9 @@ def main() -> int:
     ap.add_argument("--load", metavar="MAP", help="pre-load anchors from a saved map file")
     ap.add_argument("--refit", metavar="MAP",
                     help="OFFLINE: re-fit a saved map's anchors and rewrite its table (no hardware)")
+    ap.add_argument("--rebase", type=int, metavar="DELTA",
+                    help="with --refit: add DELTA to every anchor's BASE step, then re-fit. Use to shift a "
+                         "map to a new home origin (e.g. switch-home: DELTA = -A_ENDSTOP_STEPS)")
     ap.add_argument("--out", help="output path for --refit (default: overwrite the input)")
     args = ap.parse_args()
 
@@ -387,6 +390,10 @@ def main() -> int:
         m.load(args.refit)
         if not m.anchors:
             return 1
+        if args.rebase:
+            for v in m.anchors.values():
+                v["base"] += args.rebase
+            print(f"   rebased every anchor's base by {args.rebase:+d} steps (home-origin shift)")
         m.report()
         m.save(args.out or args.refit)
         return 0
@@ -427,6 +434,11 @@ def main() -> int:
                     m.anchors.pop(arg.lower(), None); print(f"   removed {arg.lower()}")
                 elif c == "load" and arg:
                     m.load(arg)
+                elif c == "rebase" and arg:
+                    d = int(arg)
+                    for v in m.anchors.values():
+                        v["base"] += d
+                    print(f"   rebased {len(m.anchors)} anchors' base by {d:+d} (then `map`/`save`)")
                 elif c in ("map", "build"):
                     m.report()
                 elif c == "goto" and arg:

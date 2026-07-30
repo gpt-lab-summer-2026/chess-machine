@@ -54,26 +54,22 @@ def test_axis_swap():
     assert geo.name_to_point("a8") == Point(93.5 + 7 * 27, -94.5)
 
 
-def test_graveyard_two_arcs_one_side_reachable_off_board():
+def test_graveyard_dish_scatters_off_board_and_reachable():
     cfg = GeometryConfig()
     geo = BoardGeometry(cfg)
     slots = geo.graveyard_slots()
-    assert len(slots) == 16                       # 2 concentric arcs x 8
+    assert len(slots) == cfg.graveyard_capacity          # one dish, `capacity` drop points
 
-    inner = math.radians(cfg.graveyard_inner_deg)
-    side = cfg.graveyard_side                     # -1 = h1 / -theta (a8/+theta is switch-blocked)
-    # first slot: OUTER arc, inner angle, on the configured (reachable) side
-    assert slots[0].x == pytest.approx(cfg.graveyard_radius_mm * math.cos(inner))
-    assert slots[0].z == pytest.approx(side * cfg.graveyard_radius_mm * math.sin(inner))
-    # slot 8 begins the INNER arc: same side + angle, smaller radius
-    assert slots[8].x == pytest.approx(cfg.graveyard_radius2_mm * math.cos(inner))
-    assert slots[8].z == pytest.approx(side * cfg.graveyard_radius2_mm * math.sin(inner))
-    # all storage is on ONE side now (the a8 side is blocked by the base limit switch)
-    assert all((s.z < 0) == (side < 0) for s in slots)
-
+    ct = math.radians(cfg.graveyard_center_deg)
+    cx = cfg.graveyard_center_r_mm * math.cos(ct)
+    cz = cfg.graveyard_center_r_mm * math.sin(ct)
+    spread = min(cfg.graveyard_jitter_mm, cfg.graveyard_diameter_mm / 2.0)
+    # dish sits on the -theta (h1) side, well off the board's h-edge
+    assert cz < 0 and cfg.graveyard_center_deg <= -40
     for s in slots:
-        assert cfg.r_min_mm <= _r(s) <= cfg.r_max_mm   # reachable
-        assert not _on_board(cfg, s)                    # clears the board
+        assert math.hypot(s.x - cx, s.z - cz) <= spread + 1e-9   # every drop within the dish jitter
+        assert cfg.r_min_mm <= _r(s) <= cfg.r_max_mm             # reachable
+        assert not _on_board(cfg, s)                              # clears the board
 
 
 def test_invalid_axes_rejected():
