@@ -20,11 +20,15 @@ import yaml
 @dataclass
 class VadConfig:
     enabled: bool = True
-    aggressiveness: int = 2          # webrtcvad 0..3 (3 = most aggressive)
+    aggressiveness: int = 1          # webrtcvad 0..3 (3 = most aggressive)
     silence_ms: int = 800            # trailing silence that ends an utterance
     min_speech_ms: int = 250         # ignore blips with less actual speech than this
     frame_ms: int = 30               # webrtcvad frame size (10/20/30)
-    max_utterance_s: float = 15.0
+    pre_roll_ms: int = 240           # audio kept from BEFORE the VAD triggered. webrtcvad
+                                     # spends a frame or two deciding, and discarding those
+                                     # ate the leading plosive: "pawn to e4" -> "on to e4".
+                                     # 0 disables. Doesn't count toward min_speech_ms.
+    max_utterance_s: float = 5.0
 
 
 @dataclass
@@ -62,12 +66,72 @@ _CHESS_STT_PROMPT = (
 @dataclass
 class SttConfig:
     backend: str = "distil_whisper"          # distil_whisper | esp32_whisper | network_whisper | stdin
-    model: str = "distil-small.en"          # faster-whisper alias -> CTranslate2 build
+    model: str = "distil-small.en"           # faster-whisper alias -> CTranslate2 build.
+                                             # distil-large-v3.5 measures 26-29 s/utterance on
+                                             # the Pi 5 CPU vs 6.2 s here -- unusable for a
+                                             # conversational loop. Its extra accuracy was on
+                                             # notation that move_parsing already repairs.
     device: str = "cpu"                      # cpu | cuda | auto
-    compute_type: str = "int8"               # int8 is fast on the Pi 5 CPU
+    compute_type: str = "int8"               # CPU supports int8 / int8_float32 / float32 only
+                                             # (int8_float16 is CUDA-only and RAISES on the Pi)
+    cpu_threads: int = 3                     # MEASURED on the 4-core Pi 5: 1->9.0 s, 2->6.4 s,
+                                             # 3->6.2 s, 4->6.4 s. 3 wins because the 4th thread
+                                             # fights the main thread; leaving a core free also
+                                             # keeps llama-server/Kokoro from being starved.
+                                             # 0 = let CTranslate2 grab every core.
     language: str = "en"
-    beam_size: int = 1
+    beam_size: int = 5                       # beam search, NOT greedy (=1). On a short chess
+                                             # command the encoder dominates and the decode is
+                                             # ~10 tokens, so beam 5 is within noise of beam 1 on
+                                             # latency (MEASURED 2026-07-30: 6.0-6.7 s either way)
+                                             # while being markedly more robust on quiet/degraded
+                                             # audio -- greedy is what turned "d2 to d4" into
+                                             # "to do four".
     prompt: str = _CHESS_STT_PROMPT          # bias Whisper toward chess vocab (no NATO needed)
+    # These four together bound Whisper's worst case. The problem: on noisy or
+    # near-silent input (e.g. the mic dropping out) Whisper falls into a repetition
+    # hallucination ("four, four, four, ...") and by default retries that losing
+    # decode at each of SIX rising temperatures -- one observed case took 48s to
+    # "transcribe" 2.9s of audio, producing garbage the SLM then acted on.
+    #
+    # temperature=0.0 collapses those six attempts to one greedy pass (the big
+    # latency win). But it also removes the fallback ladder, which is what whisper
+    # normally uses to RECOVER from a repetitive decode -- so on its own, greedy
+    # LOOPS instead. Measured (A/B on synthesized chess speech, 2026-07-30): with
+    # temperature=0.0 and no penalty, "take it back take it back" ran away to ~9.7s
+    # of "take it back, take it back, x12"; WITH the penalty it stopped at ~5.8s.
+    # So repetition_penalty is not optional decoration here -- it is what replaces
+    # the recovery that temperature=0.0 removed. It cost nothing on the 5 clean
+    # phrases in that A/B (byte-identical output). 1.15 matched 1.3 in testing; 1.3
+    # is kept for margin against the worse hallucinations seen on real hardware.
+    # max_new_tokens caps a single pass (~48 tokens >> any real chess command, but
+    # far below the ~448-token runaway); it must stay well under 448 minus the
+    # initial_prompt length (~72 tokens) or faster-whisper raises.
+    max_new_tokens: int = 48
+    temperature: float = 0.0
+    repetition_penalty: float = 1.3
+    no_repeat_ngram_size: int = 3            # hard ban on repeated 3-grams; belt-and-suspenders
+    max_chars: int = 200                     # final text-level backstop, independent of tokens
+    # -- audio conditioning before Whisper (DistilWhisperSTT._prep_audio) --------- #
+    # The single biggest real-vs-synthetic gap. faster-whisper does NO amplitude
+    # normalization, and Whisper hallucinates confident text on quiet input -- so a
+    # loud TTS round-trip transcribes fine while a real (quieter) mic mangles the
+    # same words. Measured on distil-small.en (2026-07-30) over degraded chess
+    # audio: normalize + pad + beam search + vad_filter OFF turned "to do four"
+    # back into "d2 to d4" and "to-f3" into "knight to f3", at no extra latency.
+    normalize: bool = True                   # level-normalize each utterance toward target_rms
+    target_rms: float = 0.12                 # RMS-normalize toward this; gain is capped so the
+                                             # peak stays < 1.0 (never clips, and one click can't
+                                             # drag quiet speech up on its own)
+    pad_ms: int = 200                        # frame the clip with this much silence each side, so
+                                             # a short, tightly VAD-gated command gets clean
+                                             # onset/offset instead of being clipped
+    vad_filter: bool = False                 # Whisper's INTERNAL Silero VAD. Off by default: the
+                                             # capture layer already gates with webrtcvad (+ the
+                                             # saw_signal/min_speech guards), and double-VADing an
+                                             # already-tight ~1 s clip re-trimmed and mangled it
+                                             # ("pawn to e4" -> "Pond to E4"). Flip back to true only
+                                             # if a false VAD trigger starts transcribing room noise.
     # network_whisper only: an HTTP/RTSP audio stream (e.g. the IP Webcam app on a
     # phone, http://<phone-ip>:8080/audio.opus). Opened per listen window via PyAV.
     stream_url: str = ""
@@ -82,6 +146,20 @@ class TtsConfig:
     sample_rate: int = 24000                 # Kokoro native rate
     model_path: str = "models/kokoro/kokoro-v1.0.onnx"
     voices_path: str = "models/kokoro/voices-v1.0.bin"
+    intra_op_threads: int = 2                # onnxruntime would otherwise take all 4 cores
+                                             # and busy-wait between utterances, fighting
+                                             # whisper (3) and llama-server on a 4-core Pi.
+    # Silence prepended to every spoken clip so the Bluetooth speaker's amplifier
+    # is awake before the first syllable. The BTL-324 powers its amp down between
+    # utterances (a chess turn is longer than any idle timeout), and the first
+    # ~350 ms after it wakes is swallowed ("Chess machine ready" -> "ess machine
+    # ready"). Disabling PipeWire node-suspend (50-bt-no-suspend.conf) stopped the
+    # link renegotiation but NOT this amp wake, so the lead-in has to cover it.
+    # Tune by ear with scripts/tts_leadin_test.py: use the smallest clean value.
+    lead_in_s: float = 0.5
+    lead_in_primer: bool = False             # if the amp only wakes on SIGNAL (not on a
+                                             # silent-but-active link), fill the lead-in with
+                                             # inaudible low-level noise instead of pure silence
 
 
 # --------------------------------------------------------------------------- #

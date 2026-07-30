@@ -8,9 +8,26 @@ webrtcvad, so no microphone, model, or hardware is needed.
 import numpy as np
 
 from chessmachine.config import VadConfig
-from chessmachine.voice.audio import collect_utterance
+from chessmachine.voice.audio import _lead_in, collect_utterance
 
 SR = 16000
+
+
+def test_lead_in_is_silence_by_default():
+    z = _lead_in(240, channels=1, primer=False)
+    assert z.shape == (240,) and z.dtype == np.dtype("<i2") and not z.any()
+
+
+def test_lead_in_primer_is_nonzero_but_inaudible():
+    """A signal-detect amp needs actual signal to wake; the primer supplies it, but
+    quiet enough (~-62 dBFS) to be inaudible under speech."""
+    p = _lead_in(240, channels=1, primer=True)
+    assert p.shape == (240,) and p.any()               # signal present
+    assert int(np.abs(p).max()) <= 24                  # but bounded / inaudible
+
+
+def test_lead_in_zero_length_is_empty():
+    assert _lead_in(0, channels=1, primer=True).shape == (0,)
 
 
 def _cfg(**kw) -> VadConfig:
@@ -55,11 +72,55 @@ def test_stops_early_and_does_not_consume_the_whole_stream():
     assert vad.calls == 5                   # ended at the silence run, not 50 frames in
 
 
-def test_leading_silence_is_skipped_until_speech_starts():
-    # 5 silent frames, then speech: the silence must NOT be included.
+def test_pre_roll_keeps_the_speech_onset():
+    """webrtcvad spends a frame or two latching on, and dropping those frames ate
+    the leading plosive ("pawn to e4" -> "on to e4"). Up to pre_roll_ms of
+    pre-trigger audio is prepended instead."""
     vad = ScriptedVad([False] * 5 + [True] * 3 + [False] * 3)
     out = collect_utterance(_frames(20), vad, _cfg(), SR)
+    # 5 available pre-roll (< the 8-frame cap at 240 ms) + 3 speech + 3 trailing
+    assert out.shape[0] == 11 * 480
+
+
+def test_pre_roll_is_bounded_by_pre_roll_ms():
+    # 20 silent frames precede speech, but only 240/30 == 8 may be kept.
+    vad = ScriptedVad([False] * 20 + [True] * 3 + [False] * 3)
+    out = collect_utterance(_frames(40), vad, _cfg(), SR)
+    assert out.shape[0] == (8 + 3 + 3) * 480
+
+
+def test_pre_roll_disabled_skips_leading_silence():
+    vad = ScriptedVad([False] * 5 + [True] * 3 + [False] * 3)
+    out = collect_utterance(_frames(20), vad, _cfg(pre_roll_ms=0), SR)
     assert out.shape[0] == 6 * 480          # 3 speech + 3 trailing silence only
+
+
+def test_pre_roll_does_not_satisfy_min_speech_ms():
+    """Pre-roll is context, not speech: a 1-frame blip preceded by plenty of
+    pre-roll must still be rejected by min_speech_ms."""
+    vad = ScriptedVad([False] * 5 + [True] + [False] * 3)
+    out = collect_utterance(_frames(20), vad, _cfg(), SR)
+    assert out.shape[0] == 0
+
+
+def test_digital_silence_is_reported_as_a_dead_device(caplog):
+    """All-zero samples mean the capture device is not delivering (e.g. the USB mic
+    dropped off and `default` resolved to a source-less PipeWire graph). Whisper
+    hallucinates confident text from silence, so this must be refused loudly."""
+    frames = [np.zeros(480, dtype="<i2") for _ in range(10)]
+    vad = ScriptedVad([True] * 4 + [False] * 3)     # VAD claims speech anyway
+    with caplog.at_level("ERROR"):
+        out = collect_utterance(frames, vad, _cfg(), SR)
+    assert out.shape[0] == 0
+    assert "ZERO audio" in caplog.text
+
+
+def test_quiet_but_nonzero_audio_is_still_accepted():
+    """Only exact digital silence is treated as a dead device; a genuinely quiet
+    room must still transcribe."""
+    vad = ScriptedVad([True] * 4 + [False] * 3)
+    out = collect_utterance(_frames(10, value=2), vad, _cfg(), SR)
+    assert out.shape[0] > 0
 
 
 def test_blip_is_rejected_as_too_little_speech():

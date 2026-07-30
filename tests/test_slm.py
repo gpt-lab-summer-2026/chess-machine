@@ -113,6 +113,69 @@ def test_interpret_keeps_real_move():
     assert out[0].action == "opponent_move"
 
 
+# -- grounding config actions in the transcript (the 3B over-generation) ----- #
+def test_interpret_drops_set_difficulty_leaked_from_state_line():
+    """The model habitually echoes the State line ("difficulty medium") as a
+    set_difficulty on an ordinary move. With no difficulty word in the transcript,
+    the guard drops it and only the real move survives."""
+    reply = ('{"actions": [{"action": "opponent_move", "move": "e2e4"}, '
+             '{"action": "set_difficulty", "difficulty": "medium"}]}')
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    out = nlu.interpret("e4", _ctx())
+    assert [i.action for i in out] == ["opponent_move"]
+
+
+def test_interpret_drops_set_side_invented_from_noise():
+    """Room noise must never silently swap sides: a set_side with no color/side
+    word in the transcript is dropped (then falls back to a re-ask)."""
+    reply = '{"actions": [{"action": "set_side", "color": "black"}]}'
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    out = nlu.interpret("we have we want to be it", _ctx())
+    assert all(i.action != "set_side" for i in out)
+
+
+def test_interpret_keeps_grounded_set_difficulty():
+    reply = '{"actions": [{"action": "set_difficulty", "difficulty": "hard"}]}'
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    out = nlu.interpret("set difficulty to hard", _ctx())
+    assert [i.action for i in out] == ["set_difficulty"] and out[0].difficulty == "hard"
+
+
+def test_interpret_keeps_grounded_compound_request():
+    """The legitimate compound must still split — both actions are named in words."""
+    reply = ('{"actions": [{"action": "set_side", "color": "white"}, '
+             '{"action": "set_difficulty", "difficulty": "hard"}]}')
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    out = nlu.interpret("give me black and set difficulty to hard", _ctx())
+    assert [i.action for i in out] == ["set_side", "set_difficulty"]
+
+
+def test_interpret_drops_recalibrate_invented_from_noise():
+    """recalibrate sweeps the crane; noise must not trigger it. No home/calibrate
+    word in the transcript -> dropped."""
+    reply = '{"actions": [{"action": "recalibrate"}]}'
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    out = nlu.interpret("we have we want to be it", _ctx())
+    assert all(i.action != "recalibrate" for i in out)
+
+
+def test_interpret_keeps_grounded_recalibrate():
+    reply = '{"actions": [{"action": "recalibrate"}]}'
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    out = nlu.interpret("re-home the crane", _ctx())
+    assert [i.action for i in out] == ["recalibrate"]
+
+
+def test_interpret_drops_engine_move_paired_with_opponent_move():
+    """You can't both state your move and ask the robot to move; the robot
+    auto-replies. Keep the human's move, drop the tacked-on engine_move."""
+    reply = ('{"actions": [{"action": "opponent_move", "move": "g1f3"}, '
+             '{"action": "engine_move"}]}')
+    nlu = SlmNLU(FakeClient(reply), RuleBasedNLU())
+    out = nlu.interpret("knight to f3", _ctx())
+    assert [i.action for i in out] == ["opponent_move"]
+
+
 # -- phrasing / small talk / commentary -------------------------------------- #
 def test_phrase_analysis_uses_model_text():
     nlu = SlmNLU(FakeClient("  White is much better.  "), RuleBasedNLU())

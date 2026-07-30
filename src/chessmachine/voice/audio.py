@@ -18,16 +18,35 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Small silence prepended to each pw-play, so any amplifier ramp on the speaker
-# eats silence rather than the first syllable.
-#
-# This used to be 0.5 s and STILL clipped, because padding was the wrong fix: the
-# BT sink was being SUSPENDED after 5 s idle (WirePlumber's default), and on resume
-# PipeWire renegotiates the A2DP link and drops whatever is written meanwhile --
-# pad included. The real fix is session.suspend-timeout-seconds = 0 for bluez nodes
-# (~/.config/wireplumber/wireplumber.conf.d/50-bt-no-suspend.conf), which keeps the
-# link up so playback starts immediately. This short pad is just cheap insurance.
-_BT_LEAD_IN_S = 0.15
+# Default silence prepended to each pw-play, so the speaker's amplifier is awake
+# before the first syllable. Two separate causes clip that syllable:
+#   1. PipeWire SUSPENDING the idle BT node -> A2DP renegotiation drops the start.
+#      Fixed out-of-band by session.suspend-timeout-seconds = 0 for bluez nodes
+#      (~/.config/wireplumber/wireplumber.conf.d/50-bt-no-suspend.conf).
+#   2. The SPEAKER'S OWN amp powering down between utterances and swallowing the
+#      first ~350 ms when it wakes. Suspend-disable does nothing for this -- only a
+#      long-enough lead-in does. Kokoro emits just ~40 ms of its own leading
+#      silence, so this pad carries the rest.
+# Overridable per call (and via tts.lead_in_s); tune by ear with
+# scripts/tts_leadin_test.py.
+_BT_LEAD_IN_S = 0.5
+
+
+def _lead_in(n: int, channels: int, primer: bool):
+    """Build `n` frames of lead-in for the speaker's amp to wake into.
+
+    Silence by default. With `primer=True`, inaudible low-level noise (~-62 dBFS)
+    instead, for amps that only wake on actual SIGNAL rather than on a silent but
+    active link -- pure silence never rouses those, so the first syllable still
+    clips no matter how long the pad. Pure and I/O-free so it can be unit-tested.
+    """
+    import numpy as np
+
+    shape = (n,) if channels == 1 else (n, channels)
+    if n <= 0 or not primer:
+        return np.zeros(shape, dtype="<i2")
+    rng = np.random.default_rng(0)
+    return rng.integers(-24, 25, size=shape).astype("<i2")
 
 
 def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
@@ -44,6 +63,8 @@ def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
     with a fake VAD and each backend only has to supply frames. Any per-window
     cap (max_utterance_s) belongs to the frame producer.
     """
+    import collections
+
     import numpy as np
 
     frame_ms = vad_cfg.frame_ms
@@ -52,14 +73,28 @@ def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
     triggered = False
     num_silent = 0
     speech_frames = 0
+    saw_signal = False
+    # Pre-roll: webrtcvad needs a frame or two to latch onto speech onset, so the
+    # frames it spends deciding used to be thrown away -- taking the leading
+    # plosive with them ("pawn to e4" transcribed as "on to e4"). Keep a short
+    # ring buffer of pre-trigger frames and prepend it once speech starts.
+    pre_roll_frames = max(0, int(vad_cfg.pre_roll_ms / frame_ms))
+    pending: collections.deque | None = (
+        collections.deque(maxlen=pre_roll_frames) if pre_roll_frames else None)
 
     for chunk in frames:
+        saw_signal = saw_signal or bool(chunk.any())
         is_speech = vad.is_speech(chunk.tobytes(), sr)
         if not triggered:
             if is_speech:
                 triggered = True
+                if pending:
+                    collected.extend(pending)   # recover the speech onset
+                    pending.clear()
                 collected.append(chunk)
                 speech_frames += 1
+            elif pending is not None:
+                pending.append(chunk)
         else:
             collected.append(chunk)
             if is_speech:
@@ -69,6 +104,18 @@ def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
                 num_silent += 1
             if num_silent >= silence_frames:
                 break
+
+    # A capture path that yields DIGITAL SILENCE (every sample exactly zero) is a
+    # dead device, not a quiet room -- e.g. input_device "default" resolving to a
+    # PipeWire graph with no source because the USB mic dropped off the bus. It
+    # must be called out: whisper happily hallucinates text from near-silence
+    # ("oot Saber-s-h-h-huh"), the SLM then turns that into a confident chess
+    # move, and the failure looks like bad accuracy instead of a missing mic.
+    if not saw_signal:
+        log.error("Microphone produced ZERO audio for the whole window -- the capture "
+                  "device is not delivering samples. Check that the mic is connected "
+                  "(`arecord -l`, `wpctl status`); refusing to transcribe silence.")
+        return np.zeros(0, dtype="float32")
 
     # Reject blips: a click can trip the VAD for a frame or two. Require a
     # minimum amount of actual speech before we bother transcribing.
@@ -129,17 +176,20 @@ class AudioCapture:
         return audio.reshape(-1)
 
 
-def play(samples: np.ndarray, sample_rate: int, device: int | str | None = None) -> None:
+def play(samples: np.ndarray, sample_rate: int, device: int | str | None = None,
+         *, lead_in_s: float = _BT_LEAD_IN_S, lead_in_primer: bool = False) -> None:
     """Play float32 samples on the speaker, blocking until done.
 
     On the Pi, output is routed through PipeWire via `pw-play`: PortAudio/ALSA
     only sees the raw HDMI device and can't reach the Bluetooth sink, whereas
     PipeWire owns the BT speaker and transparently resamples/reformats to it.
     Falls back to sounddevice where `pw-play` isn't installed (e.g. dev boxes).
+
+    `lead_in_s` / `lead_in_primer` prepend an amp-wake lead-in (see `_lead_in`).
     """
     pw_play = shutil.which("pw-play")
     if pw_play is not None:
-        _play_via_pipewire(pw_play, samples, sample_rate)
+        _play_via_pipewire(pw_play, samples, sample_rate, lead_in_s, lead_in_primer)
         return
     import sounddevice as sd
 
@@ -147,7 +197,9 @@ def play(samples: np.ndarray, sample_rate: int, device: int | str | None = None)
     sd.wait()
 
 
-def _play_via_pipewire(pw_play: str, samples: np.ndarray, sample_rate: int) -> None:
+def _play_via_pipewire(pw_play: str, samples: np.ndarray, sample_rate: int,
+                       lead_in_s: float = _BT_LEAD_IN_S,
+                       lead_in_primer: bool = False) -> None:
     """Write samples to a temp WAV and play it through PipeWire.
 
     A WAV file (not a raw stdin pipe) is used because pw-play is libsndfile-
@@ -166,10 +218,9 @@ def _play_via_pipewire(pw_play: str, samples: np.ndarray, sample_rate: int) -> N
         arr = (np.clip(arr, -1.0, 1.0) * 32767.0).astype("<i2")
     channels = 1 if arr.ndim == 1 else arr.shape[1]
 
-    lead = int(sample_rate * _BT_LEAD_IN_S)       # silence so the BT wake-up clips nothing
+    lead = int(sample_rate * lead_in_s)           # amp-wake lead-in so nothing clips
     if lead > 0:
-        pad = np.zeros((lead,) if arr.ndim == 1 else (lead, channels), dtype="<i2")
-        arr = np.concatenate([pad, arr])
+        arr = np.concatenate([_lead_in(lead, channels, lead_in_primer), arr])
 
     fd, path = tempfile.mkstemp(suffix=".wav")
     os.close(fd)

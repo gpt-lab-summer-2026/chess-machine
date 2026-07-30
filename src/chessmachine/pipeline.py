@@ -12,6 +12,7 @@ import contextlib
 import logging
 import re
 import threading
+import time
 
 import chess
 
@@ -42,6 +43,11 @@ HELP_TEXT = (
     "or say 'new game'."
 )
 QUIT_WORDS = {"quit", "exit", "stop", "goodbye", "q"}
+# A real listen window blocks on the mic for up to audio.vad.max_utterance_s, so an
+# empty one returning faster than this means the capture path failed rather than
+# simply hearing nothing.
+_FAST_EMPTY_WINDOW_S = 1.0
+_EMPTY_WINDOW_BACKOFF_S = 1.0
 _AFFIRM_WORDS = {
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "confirm", "affirmative", "please",
 }
@@ -95,8 +101,10 @@ class ChessMachine:
             self._do_engine_move("I'll open with")
 
     def run(self) -> None:
+        empty_windows = 0
         try:
             while True:
+                window_start = time.monotonic()
                 # Cue "Your move." right before we open the mic, so the prompt
                 # finishes speaking just as recording begins (once per human turn).
                 self._prompt_move_if_new_turn()
@@ -108,7 +116,20 @@ class ChessMachine:
                 self._led("blink")            # (idempotent) blinking = working on it
                 self.clock.stop_user()
                 if not transcript:
+                    # A healthy silent window already cost ~25 s of blocking mic
+                    # reads, so re-entering at once is fine. A BROKEN mic, though,
+                    # returns instantly -- and this loop had no backoff, so it would
+                    # spin the open/read/close cycle at 100% CPU forever. Throttle
+                    # once the empty windows start coming back too fast to be real.
+                    empty_windows += 1
+                    if time.monotonic() - window_start < _FAST_EMPTY_WINDOW_S:
+                        if empty_windows in (3, 30) or empty_windows % 300 == 0:
+                            log.warning("%d empty mic windows, each under %.1fs -- is the "
+                                        "microphone working? Backing off.",
+                                        empty_windows, _FAST_EMPTY_WINDOW_S)
+                        time.sleep(_EMPTY_WINDOW_BACKOFF_S)
                     continue
+                empty_windows = 0
                 if transcript.strip().lower() in QUIT_WORDS:
                     self._say("Goodbye.")
                     break

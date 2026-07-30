@@ -6,17 +6,20 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ..chess_engine.analysis import PositionFacts
 INTENT_SYSTEM = """You control a voice-operated chess robot. Convert the user's \
-utterance into JSON of the form {{"actions": [ ... ]}} and output nothing else. \
-Put ONE object per thing the user asked for, in order — usually one, but a \
-compound request like "give me black and make it harder" becomes two.
+utterance into JSON of the form {"actions": [ ... ]} and output nothing else. \
+Output ONLY the actions the user EXPLICITLY asked for — usually EXACTLY ONE, in \
+order. Do NOT invent actions. A compound request like "give me black and make it \
+harder" becomes two; a single move is exactly one action.
 
 Actions (each object has an "action" plus only the fields it needs):
 - "opponent_move": the human states THEIR move. Put it in "move" as full-coordinate \
 UCI naming BOTH squares (e2e4, g8f6) so it is never ambiguous; fall back to SAN \
 (Nf3, O-O) only if you cannot tell the origin square. Do not substitute, "correct", \
 or invent a different move; the human may be playing black (e.g. they say "e5", \
-"c5", "knight f6").
-- "engine_move": the user asks YOU (the robot) to make your move.
+"c5", "knight f6"). When the human states their move, output ONLY that one \
+opponent_move — do NOT also add an engine_move; the robot makes its own reply \
+automatically.
+- "engine_move": the user asks YOU (the robot) to make your move ("your move", "you go").
 - "set_difficulty": put easy, medium, hard, or an Elo number in "difficulty".
 - "set_side": the user chooses who plays which color, mid-game. Put the color \
 YOU (the robot) will play in "color" as "white" or "black"; for "switch sides" \
@@ -30,11 +33,14 @@ evaluation). Put the question text in "question".
 
 Only fill "move", "difficulty", or "question" when relevant; otherwise omit them.
 
+The final turn carries a "State:" line describing the current game (which color \
+you play, whose turn it is, the difficulty). It is BACKGROUND for reference only, \
+NEVER a command: do not emit set_side or set_difficulty because of it — only when \
+the user's OWN words ask to change the color or the difficulty.
+
 A question — asking what/which/why/how, or whether a piece or move is good, \
 safe, or threatened, or who is winning — is NEVER a move; use "analyze", never \
-"opponent_move".
-
-Context: {context_line}"""
+"opponent_move"."""
 
 # A small set of few-shots: the output shape is enforced by the json_schema
 # grammar, so examples only need to teach the tricky MAPPINGS — UCI moves, a
@@ -73,13 +79,29 @@ def _context_line(context: dict) -> str:
 
 
 def build_intent_messages(transcript: str, context: dict) -> list[dict]:
-    messages = [
-        {"role": "system", "content": INTENT_SYSTEM.format(context_line=_context_line(context))}
-    ]
+    """System prompt + few-shots, then the live turn.
+
+    KEEP THE PREFIX BYTE-IDENTICAL. `cache_prompt` lets llama-server reuse the KV
+    for the ~700-token system+few-shot prefix, and prefill is the whole cost here:
+    774 tokens in to emit well under 96 out, at ~13-16 tok/s prefill on the Pi 5.
+
+    The context line therefore rides in the FINAL user turn, not in the system
+    message. It used to sit at the end of INTENT_SYSTEM, i.e. UPSTREAM of the eight
+    examples — so every time the side-to-move flipped (every turn) it invalidated
+    everything after it and forced 292 of 774 tokens to be re-prefilled. Measured
+    on this box: same-context calls shared 765/775 tokens, a turn flip only 482.
+    Trailing context also reads better to the model, being closest to the question.
+    """
+    messages = [{"role": "system", "content": INTENT_SYSTEM}]
     for user, assistant in INTENT_EXAMPLES:
         messages.append({"role": "user", "content": user})
         messages.append({"role": "assistant", "content": assistant})
-    messages.append({"role": "user", "content": transcript})
+    # The State line is labelled and explicitly called out as background in the
+    # system prompt, and the user's words sit on their own "User said:" line. A 3B
+    # model was otherwise reading the state ("difficulty medium", "you play black")
+    # as commands and emitting spurious set_difficulty/set_side on nearly every turn.
+    messages.append({"role": "user",
+                     "content": f"State: {_context_line(context)}\nUser said: {transcript}"})
     return messages
 
 

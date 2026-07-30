@@ -18,6 +18,7 @@ echo
 echo "==> distil-whisper is fetched automatically by faster-whisper on first run,"
 echo "    cached under ~/.cache/huggingface. To pre-download:"
 echo "    python -c \"from faster_whisper import WhisperModel; WhisperModel('distil-small.en')\""
+echo "    (distil-large-v3.5 is 1.5 GB and 26-29 s/utterance on a Pi 5 -- don't.)"
 echo
 echo "==> Stockfish:   sudo apt install stockfish   (or build from source)"
 echo

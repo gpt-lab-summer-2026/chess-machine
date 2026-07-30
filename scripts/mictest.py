@@ -84,7 +84,7 @@ def level_meter(cfg, seconds: float) -> int:
     return 0
 
 
-def capture_once(cfg, cap, transcribe, model, save: str | None) -> str:
+def capture_once(cfg, cap, stt, save: str | None) -> str:
     import numpy as np
 
     print("\n>>> SPEAK NOW (e.g. \"knight to f3\"), then pause ~1s ...")
@@ -104,12 +104,12 @@ def capture_once(cfg, cap, transcribe, model, save: str | None) -> str:
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
             w.writeframes(pcm.tobytes())
         print(f"  saved {save}   (play it back: pw-play {save})")
-    if not transcribe:
+    if stt is None:
         return ""
-    segs, _info = model.transcribe(x, language=cfg.stt.language,
-                                   beam_size=cfg.stt.beam_size, vad_filter=True,
-                                   initial_prompt=cfg.stt.prompt or None)
-    text = " ".join(s.text.strip() for s in segs).strip()
+    # Transcribe through the SAME method the game uses (DistilWhisperSTT.transcribe),
+    # so this reflects the real level-normalization, padding, beam size, and
+    # vad_filter setting — not a hand-rolled transcribe call that could drift from it.
+    text = stt.transcribe(x)
     print(f"  TRANSCRIPT: {text!r}" if text else
           "  TRANSCRIPT: (empty — audio captured but Whisper found no words)")
     return text
@@ -152,18 +152,25 @@ def main(argv=None) -> int:
     cap = create_capture(cfg.stt, cfg.audio)
     print(f"capture = {type(cap).__name__}")
 
-    model = None
+    stt = None
     if not args.vad:
         print(f"loading Whisper ({cfg.stt.model}, {cfg.stt.device}/{cfg.stt.compute_type}) "
               f"— takes a few seconds...")
         from faster_whisper import WhisperModel
+
+        from chessmachine.voice.stt import DistilWhisperSTT
         model = WhisperModel(cfg.stt.model, device=cfg.stt.device,
-                             compute_type=cfg.stt.compute_type)
+                             compute_type=cfg.stt.compute_type, cpu_threads=cfg.stt.cpu_threads)
+        # Wrap the model in the production STT (skip __init__ so no mic is opened)
+        # to reuse its exact transcribe path — same audio prep and decode params.
+        stt = DistilWhisperSTT.__new__(DistilWhisperSTT)
+        stt.cfg = cfg.stt
+        stt.model = model
 
     got = ""
     try:
         while True:
-            got = capture_once(cfg, cap, model is not None, model, args.save)
+            got = capture_once(cfg, cap, stt, args.save)
             if not args.loop:
                 break
             print("  (Ctrl-C to stop)")

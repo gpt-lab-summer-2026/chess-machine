@@ -32,10 +32,23 @@ audio:
 
 stt:
   backend: distil_whisper   # distil_whisper (USB mic via sounddevice) | esp32_whisper (MAX4466 serial) | network_whisper (phone over WiFi, see docs/phone_mic_setup.md) | stdin (dev)
-  model: distil-small.en    # faster-whisper alias -> CTranslate2 (use distil-medium.en for accuracy)
+  model: distil-small.en      # faster-whisper alias -> CTranslate2. distil-large-v3.5 is
+                              # 26-29 s/utterance on this CPU (vs 6.2 s) -- don't go back.
   device: cpu
-  compute_type: int8
+  compute_type: int8          # CPU: int8 | int8_float32 | float32 only. int8_float16 is CUDA-only and raises.
+  cpu_threads: 3              # 3 beats 4 on a 4-core Pi 5 (measured); leaves a core for llama-server
   language: en
+  # Anti-hallucination on short/quiet commands. distil-small.en hallucinates on
+  # quiet input ("d2 to d4" -> "to do four"); these recover it at no extra latency
+  # (measured 2026-07-30). Tune with scripts/mictest.py --save + pw-play to hear
+  # the actual capture, and mictest.py to see the transcript.
+  beam_size: 5               # beam search, not greedy (=1). ~free here, far more robust.
+  normalize: true            # level-normalize each utterance; Whisper hallucinates when it's quiet
+  target_rms: 0.12           # normalize toward this loudness (gain capped so it never clips)
+  pad_ms: 200                # frame the clip with silence so a short command isn't clipped
+  vad_filter: false          # capture already VAD-gates (webrtcvad); Whisper's internal Silero VAD
+                             # double-trimmed short clips and mangled them. true only if room noise
+                             # starts getting transcribed on false triggers.
 
 tts:
   backend: kokoro           # kokoro | stdout (dev)
@@ -43,6 +56,12 @@ tts:
   speed: 1.0
   model_path: models/kokoro/kokoro-v1.0.onnx
   voices_path: models/kokoro/voices-v1.0.bin
+  intra_op_threads: 2       # onnxruntime would otherwise take all 4 cores and spin while idle
+  lead_in_s: 0.5            # silence before each spoken clip so the BT speaker's amp is awake
+                           # before the first syllable ("ess machine ready" -> "chess machine
+                           # ready"). Tune by ear: python scripts/tts_leadin_test.py
+  lead_in_primer: false    # true = fill the lead-in with inaudible low-level noise instead of
+                           # silence, for amps that only wake on SIGNAL (not on a silent link)
 
 slm:
   backend: llama_cpp        # llama_cpp | rule_based (dev/fallback, no model)
