@@ -8,9 +8,17 @@ webrtcvad, so no microphone, model, or hardware is needed.
 import numpy as np
 
 from chessmachine.config import VadConfig
-from chessmachine.voice.audio import _lead_in, collect_utterance
+from chessmachine.voice.audio import _lead_in, collect_utterance, make_beep
 
 SR = 16000
+
+
+def test_make_beep_is_bounded_faded_and_the_right_length():
+    b = make_beep(sample_rate=24000, ms=160, volume=0.22)
+    assert b.dtype == np.float32
+    assert b.shape[0] == int(24000 * 160 / 1000)
+    assert float(np.max(np.abs(b))) <= 0.22 + 1e-6       # never louder than asked
+    assert abs(float(b[0])) < 1e-3 and abs(float(b[-1])) < 1e-3   # faded in and out
 
 
 def test_lead_in_is_silence_by_default():

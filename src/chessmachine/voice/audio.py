@@ -176,6 +176,26 @@ class AudioCapture:
         return audio.reshape(-1)
 
 
+def make_beep(sample_rate: int = 24000, freq: float = 880.0, ms: int = 160,
+              volume: float = 0.22):
+    """A short sine 'earcon' with 8 ms fades, as float32 in [-1, 1].
+
+    Played the instant the mic opens so the user gets an unmistakable "speak now"
+    cue (like a voice assistant's chime). Kept brief and mid-volume so it's clear
+    but not startling. Pure/I-O-free for unit testing.
+    """
+    import numpy as np
+
+    n = int(sample_rate * ms / 1000)
+    t = np.arange(n, dtype="float32") / sample_rate
+    tone = np.sin(2 * np.pi * freq * t).astype("float32") * volume
+    fade = max(1, int(sample_rate * 0.008))            # 8 ms in/out, no click
+    ramp = np.linspace(0.0, 1.0, fade, dtype="float32")
+    tone[:fade] *= ramp
+    tone[-fade:] *= ramp[::-1]
+    return tone
+
+
 def play(samples: np.ndarray, sample_rate: int, device: int | str | None = None,
          *, lead_in_s: float = _BT_LEAD_IN_S, lead_in_primer: bool = False) -> None:
     """Play float32 samples on the speaker, blocking until done.

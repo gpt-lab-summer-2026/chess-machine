@@ -11,6 +11,15 @@ def test_defaults():
     assert c.engine.presets["medium"].elo == 1500
 
 
+def test_interaction_is_sequential_and_bounded_by_default():
+    """The hardened turn: no speak/move overlap, a hard 7 s listen cap, and an
+    audible mic-open cue."""
+    c = Config()
+    assert c.app.concurrent_actuation is False     # speak, THEN move
+    assert c.audio.vad.max_utterance_s == 7.0      # listens at most 7 s, then cuts off
+    assert c.audio.listen_beep is True             # "speak now" earcon
+
+
 def test_deep_merge(tmp_path):
     p = tmp_path / "c.yaml"
     p.write_text(

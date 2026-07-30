@@ -6,8 +6,8 @@ app:
   play_as: black            # color the MACHINE plays: white | black
   auto_reply: true          # after the opponent's move, immediately make ours
   confirm_moves: true       # speak each move as it is executed
-  concurrent_actuation: true # speak the move + explanation while the crane moves
-                             # (a capture's discard always finishes first)
+  concurrent_actuation: false # OFF = one thing at a time: speak the move fully, THEN move the
+                             # crane. Set true to speak while the crane runs (faster, less legible).
   match_clock: true         # track the human's thinking time only (ask "status"/"score")
   rehome_after_move: false   # the base limit switch bounds drift, so don't home every turn
   rehome_every_n_moves: 10   # instead, re-home every 10 finished machine moves (~20-30 s each)
@@ -20,15 +20,16 @@ audio:
                             # "default" resamples. Don't pin this to "AK5370"/hw:2,0.
   output_device: null       # unused: playback goes via pw-play (see voice/audio.py)
   sample_rate: 16000        # whisper wants 16 kHz mono
+  listen_beep: true         # short earcon the instant the mic opens = "speak now"
   vad:
     enabled: true
     aggressiveness: 2       # 0..3
     silence_ms: 1500        # trailing silence that ends an utterance. 800 cut people
                             # off mid-phrase ("knight to... f3"); 1500 tolerates a pause.
     min_speech_ms: 250      # ignore blips shorter than this (avoids phantom moves)
-    max_utterance_s: 25.0   # WHOLE window, including the wait for speech to start --
-                            # not just how long you may talk. 15 was tight once you
-                            # add think-time before speaking.
+    max_utterance_s: 7.0    # HARD cap on the whole listen window: the mic cuts off here even
+                            # if you keep talking, so each turn is bounded. Speak promptly after
+                            # the beep. VAD still ends it earlier on trailing silence.
 
 stt:
   backend: distil_whisper   # distil_whisper (USB mic via sounddevice) | esp32_whisper (MAX4466 serial) | network_whisper (phone over WiFi, see docs/phone_mic_setup.md) | stdin (dev)

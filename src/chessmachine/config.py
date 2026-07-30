@@ -28,7 +28,10 @@ class VadConfig:
                                      # spends a frame or two deciding, and discarding those
                                      # ate the leading plosive: "pawn to e4" -> "on to e4".
                                      # 0 disables. Doesn't count toward min_speech_ms.
-    max_utterance_s: float = 5.0
+    max_utterance_s: float = 7.0     # HARD cap on the whole listen window (wait-for-speech +
+                                     # speech). The mic cuts off here even if you keep talking,
+                                     # so each turn is bounded and predictable. VAD still ends it
+                                     # earlier on trailing silence; this is just the ceiling.
 
 
 @dataclass
@@ -38,6 +41,9 @@ class AudioConfig:
     sample_rate: int = 16000                 # whisper expects 16 kHz mono
     channels: int = 1
     push_to_talk: bool = False               # if True, record while a key is held
+    listen_beep: bool = True                 # play a short earcon the instant the mic opens, so
+                                             # the user has an unambiguous "speak now" cue (the
+                                             # spoken prompt + LED alone were easy to miss)
     vad: VadConfig = field(default_factory=VadConfig)
 
 
@@ -347,7 +353,9 @@ class AppConfig:
     auto_reply: bool = True           # auto-make the engine move after opponent's
     confirm_moves: bool = True        # speak each move as it is executed
     require_legal_confirmation: bool = True  # re-ask on illegal/ambiguous moves
-    concurrent_actuation: bool = True  # speak the move/explanation while the crane moves
+    concurrent_actuation: bool = False  # OFF = sequential/legible: speak the move fully, THEN move
+                                        # the crane (one thing at a time). ON = speak while the crane
+                                        # runs, trading legibility for speed.
     match_clock: bool = True          # track the human's thinking time (their clock only)
     rehome_after_move: bool = True    # re-home after EVERY finished move to zero open-loop drift
     rehome_on_capture: bool = True    # re-home after a capture (subsumed by rehome_after_move when on)
