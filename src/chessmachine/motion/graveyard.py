@@ -16,8 +16,13 @@ class GraveyardFull(RuntimeError):
 
 
 class Graveyard:
-    def __init__(self, slots: list[Point]):
+    def __init__(self, slots: list[Point], retrievable: bool = True):
         self.slots = slots
+        # A dump dish piles pieces randomly, so a specific one can't be fished back
+        # out: retrieve() returns None and callers (promotion/undo/reset) degrade to
+        # a manual-placement prompt. Storage still tracks WHAT is in there for those
+        # prompts + capacity.
+        self.retrievable = retrievable
         self.contents: list[chess.Piece | None] = [None] * len(slots)
 
     @property
@@ -41,7 +46,10 @@ class Graveyard:
         )
 
     def retrieve(self, piece_type: int, color: bool) -> Point | None:
-        """Free and return the slot of a matching piece, or None if absent."""
+        """Free and return the slot of a matching piece, or None if absent — or always
+        None for a non-retrievable dump dish (pieces piled randomly, can't fish one out)."""
+        if not self.retrievable:
+            return None
         for i, cur in enumerate(self.contents):
             if cur is not None and cur.piece_type == piece_type and cur.color == color:
                 self.contents[i] = None

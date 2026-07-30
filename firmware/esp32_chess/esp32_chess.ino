@@ -157,7 +157,11 @@ const long A_HOME_BACKOFF_STEPS = 200;    // release + slow re-approach for a re
 // as before). MEASURE it once: power on at centerline, HOME, then run `SEEK` (or the
 // anchor/tune `seek` command) — it reports the number. Bake it here + reflash; also
 // settable live via `CAL AEND <n>`.
-const long A_ENDSTOP_STEPS = 0;           // 0 until measured (keeps the old count-home behavior)
+const long A_ENDSTOP_STEPS = 0;           // step count ASSIGNED AT THE SWITCH on HOME. 0 = the switch IS
+                                          // home and the base STAYS on it; nonzero = an offset home (drive
+                                          // that many steps off the switch, e.g. back to a centerline).
+const bool A_HOME_TO_SWITCH = true;       // HOME seeks the switch and adopts A_ENDSTOP_STEPS there. false =
+                                          // sensorless count-home (needs a hand-placed boot zero, no switch).
 
 // ================ EDIT: soft limits & homing =================================
 // R is the CART's radial position from the pivot. The INNER stop is home (= r_min);
@@ -228,7 +232,8 @@ long g_rStepCount = 0;    // NET physical half-steps from boot (inner home = 0)
 float g_aStepsPerDeg = A_STEPS_PER_DEG;  // base steps/deg (scale)
 float g_aHomeDeg = A_HOME_DEG;           // base home/zero offset (deg)
 float g_rStepsPerMm = R_STEPS_PER_MM;    // rail steps/mm (scale)
-long  g_aEndstopSteps = A_ENDSTOP_STEPS; // base switch offset from centerline 0 (0 = disabled)
+long  g_aEndstopSteps = A_ENDSTOP_STEPS; // step count assigned at the switch (0 = the switch is home)
+bool  g_useEndstop = A_HOME_TO_SWITCH;   // seek the switch on HOME + guard the hard stop (SEEK toggles it)
 
 char g_line[96];     // line currently being assembled
 char g_argline[96];  // clean copy of the last full line, for arg parsing
@@ -370,7 +375,7 @@ bool baseSeekSwitch() {
 bool baseStepMotor(long motorSteps) {
   int dir = (motorSteps >= 0) ? 1 : -1;
   long n = labs(motorSteps);
-  bool guard = (g_aEndstopSteps != 0);   // only once the switch offset is calibrated
+  bool guard = g_useEndstop;             // protect the a8 hard stop whenever we home to the switch
   for (long i = 0; i < n; i++) {
     if (guard && dir == A_HOME_DIR && baseSwitchPressed()) return false;  // at the hard limit
     g_aStepPhase = (g_aStepPhase + dir + 8) & 7;
@@ -407,16 +412,17 @@ void baseMoveTo(float adeg) {
   g_curA = adeg;
 }
 void baseHome() {
-  // With the switch calibrated (A_ENDSTOP_STEPS != 0): rotate to it, adopt its known
-  // OUTPUT offset, then drive back to the centerline zero (output 0) — an ABSOLUTE
-  // home that survives power cycles + open-loop drift, no hand-placing. Without it:
-  // fall back to the sensorless count-back-to-0 (which needs a hand-placed boot home).
-  if (g_aEndstopSteps != 0 && baseSeekSwitch()) {
-    g_aStepCount = g_aEndstopSteps;   // physically at the switch = this many steps out
+  // Seek the switch and adopt A_ENDSTOP_STEPS as the count THERE — an ABSOLUTE home
+  // that survives power cycles + open-loop drift, no hand-placing. With
+  // A_ENDSTOP_STEPS = 0 the switch IS home: baseStep(-0) is a no-op, so the base STAYS
+  // on the switch (no drive-back). Nonzero would drive that far off it (offset home).
+  // If the switch isn't found (or g_useEndstop is off): count-back-to-0 fallback.
+  if (g_useEndstop && baseSeekSwitch()) {
+    g_aStepCount = g_aEndstopSteps;   // at the switch, the count is A_ENDSTOP_STEPS (0 = home is HERE)
     g_aDir = A_HOME_DIR;              // gears last engaged toward the switch
-    baseStep(-g_aStepCount);          // return to the centerline zero (output 0)
+    baseStep(-g_aStepCount);          // 0 -> baseStep(0) no-op: STAY on the switch. nonzero -> offset home
   } else {
-    if (g_aEndstopSteps != 0) Serial.println("# WARN base switch not found; count-homing instead");
+    if (g_useEndstop) Serial.println("# WARN base switch not found; count-homing instead");
     baseStep(-g_aStepCount);          // sensorless: undo every net step since boot -> 0
   }
   g_curA = g_aHomeDeg;                // step 0 IS board angle g_aHomeDeg
@@ -554,13 +560,13 @@ void doCal() {
 // the start either way. Bake the reported number into A_ENDSTOP_STEPS to persist.
 void doSeekSwitch() {
   long start = g_aStepCount;
-  long saved = g_aEndstopSteps;
-  g_aEndstopSteps = 0;                 // drop the guard so we can drive onto the switch
+  bool saved = g_useEndstop;
+  g_useEndstop = false;                // drop the guard so we can drive onto the switch
   long i;
   for (i = 0; !baseSwitchPressed() && i < A_HOME_MAX_STEPS; i++) baseStep((long)A_HOME_DIR);
   bool found = baseSwitchPressed();
-  long off = g_aStepCount - start;     // OUTPUT steps from the (trusted) zero to the switch
-  g_aEndstopSteps = found ? off : saved;
+  long off = g_aStepCount - start;     // OUTPUT steps from the current zero to the switch
+  g_useEndstop = saved;                // restore the guard; report-only (does NOT change the home offset)
   baseStep(start - g_aStepCount);      // return to where we started
   if (!found) { replyErr("SEEK: switch not found (check wiring / A_HOME_DIR sign)"); return; }
   char note[100];

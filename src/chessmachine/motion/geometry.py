@@ -71,24 +71,24 @@ class BoardGeometry:
         return self.square_to_point(chess.parse_square(name))
 
     def graveyard_slots(self) -> list[Point]:
-        """Off-board storage: two concentric arcs on ONE side of the bisector.
+        """Drop positions for the captured-piece DISH: `graveyard_capacity` points
+        scattered within `graveyard_jitter_mm` of the dish centre so successive drops
+        don't stack on the exact same spot. Uses a sunflower/phyllotaxis fill (even,
+        centre-out) inside the jitter radius (capped at the dish's own radius).
 
-        Both arcs sit on `graveyard_side` (-1 = h1/-theta): the a8/+theta side is
-        now blocked by the base limit switch + hard stop, so all storage lives on
-        the reachable side. `graveyard_radius_mm` is the outer arc and
-        `graveyard_radius2_mm` the inner one (radially separated so pieces on the two
-        arcs don't collide), each holding `graveyard_slots_per_side` slots spread
-        between `graveyard_inner_deg` and `graveyard_outer_deg`. Both radii clear the
-        board's z-extent at these angles. Filled outer arc first, inner angle first.
+        The dish sits at (`graveyard_center_r_mm`, `graveyard_center_deg`) off the
+        h1/-theta side. It is a one-way dump — pieces pile up and aren't individually
+        retrievable (see Graveyard.retrieve / config.graveyard_retrievable).
         """
-        n = self.cfg.graveyard_slots_per_side
-        inner = self.cfg.graveyard_inner_deg
-        outer = self.cfg.graveyard_outer_deg
-        side = self.cfg.graveyard_side
+        n = max(1, self.cfg.graveyard_capacity)
+        ct = math.radians(self.cfg.graveyard_center_deg)
+        cx = self.cfg.graveyard_center_r_mm * math.cos(ct)
+        cz = self.cfg.graveyard_center_r_mm * math.sin(ct)
+        spread = min(self.cfg.graveyard_jitter_mm, self.cfg.graveyard_diameter_mm / 2.0)
+        golden = math.pi * (3.0 - math.sqrt(5.0))         # golden angle, for an even scatter
         slots: list[Point] = []
-        for r in (self.cfg.graveyard_radius_mm, self.cfg.graveyard_radius2_mm):
-            for k in range(n):
-                frac = k / (n - 1) if n > 1 else 0.0
-                theta = math.radians(side * (inner + (outer - inner) * frac))
-                slots.append(Point(r * math.cos(theta), r * math.sin(theta)))
+        for k in range(n):
+            rr = spread * math.sqrt((k + 0.5) / n)         # fill centre-out, evenly
+            aa = k * golden
+            slots.append(Point(cx + rr * math.cos(aa), cz + rr * math.sin(aa)))
         return slots

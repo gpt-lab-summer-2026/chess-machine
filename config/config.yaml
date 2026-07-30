@@ -70,7 +70,7 @@ engine:
 motion:
   backend: stepmap          # stepmap (ground-truth step map) | serial (geometry) | mock | relay
   stepmap:
-    map_path: bestmap.json  # newest calibration (29 anchors); config/bestmap.json is the older 23-anchor one
+    map_path: jeemap.json  # newest calibration (29 anchors); config/bestmap.json is the older 23-anchor one
     pick_below_mm: 30.0     # set_pulley height below this -> lower to the square's calibrated depth
     match_tol_mm: 1.0       # a move must land within this of a mapped square to use the map
   serial:
@@ -110,14 +110,16 @@ motion:
     invert_rank: false
     travel_height_mm: 60.0  # pulley raised: clears pieces AND decouples magnetically
     pick_height_mm: 4.0     # pulley lowered: magnet touches a piece
-    # Captured-piece storage: two concentric arcs on the h1/-theta side ONLY — the
-    # a8/+theta side is now blocked by the base limit switch + hard stop. 2 arcs x 8 = 16 slots.
-    graveyard_radius_mm: 293.0    # outer arc
-    graveyard_radius2_mm: 250.0   # inner arc (radially clear of the outer so pieces don't touch)
-    graveyard_slots_per_side: 8   # per arc -> 16 total
-    graveyard_inner_deg: 37.0
-    graveyard_outer_deg: 52.0
-    graveyard_side: -1.0          # h1 side (reachable); +1 would be the blocked a8 side
+    # Captured-piece storage: a single circular DISH on the h1/-theta side (a8 is blocked
+    # by the limit switch). Pieces are dumped in and pile up randomly — one-way, so
+    # promotion/undo/reset ask you to place those pieces by hand.
+    graveyard_center_r_mm: 270.0  # radial distance to the dish centre
+    graveyard_center_deg: -48.0   # angle to the dish centre. THE knob: more negative = further off the
+                                  # board's g/h edge (~43 steps/deg, so ~400 steps = ~9 deg). Tune empirically.
+    graveyard_diameter_mm: 100.0  # 10 cm dish
+    graveyard_jitter_mm: 15.0     # drop scatter so pieces don't stack on one exact point
+    graveyard_capacity: 30
+    graveyard_retrievable: false
   speeds:
     travel_feed: 4000       # mm/min
     lift_feed: 1500

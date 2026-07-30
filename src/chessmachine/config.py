@@ -215,19 +215,20 @@ class GeometryConfig:
     # Pulley (vertical) travel.
     travel_height_mm: float = 60.0    # cable retracted: clears the tallest piece
     pick_height_mm: float = 4.0       # cable lowered: magnet contacts a piece
-    # Off-board storage (graveyard): two symmetric arcs in the leftover sector,
-    # at angles where |r*sin(theta)| exceeds the board's +/-108 mm z-extent (so any
-    # arc out here clears the board entirely). 2 sides x 8 = 16 slots. A full reset
-    # needs 32 slots, so with 16 the machine asks for a manual reset (see
-    # Choreographer.setup_starting_position).
-    graveyard_radius_mm: float = 293.0   # OUTER storage arc (within r_max; clears the board z-extent)
-    graveyard_radius2_mm: float = 250.0  # INNER storage arc — a 2nd concentric arc so all slots fit on
-                                         # ONE side (the base a8/+theta side is blocked by the limit switch)
-    graveyard_slots_per_side: int = 8    # slots PER ARC; two arcs -> 2x this many total
-    graveyard_inner_deg: float = 26.0    # slot angle nearest the bisector
-    graveyard_outer_deg: float = 49.0    # slot angle nearest the sector edge
-    graveyard_side: float = -1.0         # which side the arcs sit on: -1 = h1/-theta (REACHABLE);
-                                         # +1 = a8 side (blocked by the base limit switch / hard stop)
+    # Off-board storage (graveyard): captured pieces are DUMPED into a single circular
+    # dish on the h1/-theta side (the a8/+theta side is blocked by the base limit
+    # switch). Pieces pile up randomly, so the dish is a ONE-WAY container — the machine
+    # can't fish a specific piece back out, so promotion/undo/reset ask you to place
+    # those by hand (see graveyard_retrievable + Choreographer).
+    graveyard_center_r_mm: float = 270.0  # radial distance to the dish CENTRE (mm from the pivot)
+    graveyard_center_deg: float = -48.0   # angle to the dish centre. MORE NEGATIVE = further off the
+                                          # board's g/h edge. THE tuning knob (~43 steps/deg, so ~400 steps
+                                          # ~= 9 deg): nudge if drops catch the board or overshoot the dish.
+    graveyard_diameter_mm: float = 100.0  # physical dish size (10 cm), bounds the drop scatter
+    graveyard_jitter_mm: float = 15.0     # scatter radius for drops, so pieces don't all stack on one point
+    graveyard_capacity: int = 30          # max pieces before a capture is refused (a game caps ~30 total)
+    graveyard_retrievable: bool = False   # a random pile can't be retrieved from -> promotion/undo/reset
+                                          # prompt for a manual placement instead of fishing a piece out
 
 
 @dataclass
