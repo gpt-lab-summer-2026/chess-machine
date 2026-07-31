@@ -3,454 +3,454 @@
     "a8": {
       "base": -90,
       "rail": 11750,
-      "winch": 7800
+      "winch": 8400
     },
     "a1": {
       "base": -1100,
       "rail": 19000,
-      "winch": 7600
+      "winch": 8200
     },
     "h1": {
       "base": -2225,
       "rail": 11600,
-      "winch": 7770
+      "winch": 8370
     },
     "h8": {
       "base": -1150,
       "rail": 0,
-      "winch": 8050
+      "winch": 8650
     },
     "c3": {
       "base": -1126,
       "rail": 13388,
-      "winch": 7789
+      "winch": 8389
     },
     "d4": {
       "base": -1137,
       "rail": 10928,
-      "winch": 7848
+      "winch": 8448
     },
     "e4": {
       "base": -1294,
       "rail": 9747,
-      "winch": 7868
+      "winch": 8468
     },
     "d5": {
       "base": -989,
       "rail": 9769,
-      "winch": 7872
+      "winch": 8472
     },
     "e5": {
       "base": -1144,
       "rail": 8423,
-      "winch": 7897
+      "winch": 8497
     },
     "b8": {
       "base": -192,
       "rail": 9864,
-      "winch": 7844
+      "winch": 8444
     },
     "c8": {
       "base": -332,
       "rail": 8048,
-      "winch": 7887
+      "winch": 8487
     },
     "c1": {
       "base": -1364,
       "rail": 16340,
-      "winch": 7725
+      "winch": 8325
     },
     "g4": {
       "base": -1717,
       "rail": 7527,
-      "winch": 7868
+      "winch": 8468
     },
     "c7": {
       "base": -401,
       "rail": 8790,
-      "winch": 7819
+      "winch": 8419
     },
     "e6": {
       "base": -967,
       "rail": 7067,
-      "winch": 7861
+      "winch": 8461
     },
     "g6": {
       "base": -1438,
       "rail": 4342,
-      "winch": 8001
+      "winch": 8601
     },
     "h6": {
       "base": -1725,
       "rail": 3544,
-      "winch": 7961
+      "winch": 8561
     },
     "a2": {
       "base": -1018,
       "rail": 17661,
-      "winch": 7669
+      "winch": 8269
     },
     "a5": {
       "base": -611,
       "rail": 13693,
-      "winch": 7761
+      "winch": 8361
     },
     "a6": {
       "base": -478,
       "rail": 13014,
-      "winch": 7742
+      "winch": 8342
     },
     "b7": {
       "base": -333,
       "rail": 10576,
-      "winch": 7767
+      "winch": 8367
     },
     "c6": {
       "base": -711,
       "rail": 9630,
-      "winch": 7785
+      "winch": 8385
     },
     "d3": {
       "base": -1312,
       "rail": 12242,
-      "winch": 7792
+      "winch": 8392
     },
     "g2": {
       "base": -1949,
       "rail": 10894,
-      "winch": 7849
+      "winch": 8449
     },
     "h7": {
       "base": -1520,
       "rail": 1665,
-      "winch": 7963
+      "winch": 8563
     },
     "f8": {
       "base": -677,
       "rail": 3386,
-      "winch": 7928
+      "winch": 8528
     }
   },
   "table": {
     "a1": {
       "base": -1100,
       "rail": 19000,
-      "winch": 7600
+      "winch": 8200
     },
     "a2": {
       "base": -1018,
       "rail": 17661,
-      "winch": 7669
+      "winch": 8269
     },
     "a3": {
       "base": -890,
       "rail": 16219,
-      "winch": 7720
+      "winch": 8320
     },
     "a4": {
       "base": -750,
       "rail": 14841,
-      "winch": 7752
+      "winch": 8352
     },
     "a5": {
       "base": -611,
       "rail": 13693,
-      "winch": 7761
+      "winch": 8361
     },
     "a6": {
       "base": -478,
       "rail": 13014,
-      "winch": 7742
+      "winch": 8342
     },
     "a7": {
       "base": -272,
       "rail": 12410,
-      "winch": 7750
+      "winch": 8350
     },
     "a8": {
       "base": -90,
       "rail": 11750,
-      "winch": 7800
+      "winch": 8400
     },
     "b1": {
       "base": -1226,
       "rail": 17615,
-      "winch": 7667
+      "winch": 8267
     },
     "b2": {
       "base": -1124,
       "rail": 16176,
-      "winch": 7720
+      "winch": 8320
     },
     "b3": {
       "base": -1000,
       "rail": 14728,
-      "winch": 7762
+      "winch": 8362
     },
     "b4": {
       "base": -874,
       "rail": 13358,
-      "winch": 7785
+      "winch": 8385
     },
     "b5": {
       "base": -748,
       "rail": 12163,
-      "winch": 7780
+      "winch": 8380
     },
     "b6": {
       "base": -574,
       "rail": 11250,
-      "winch": 7755
+      "winch": 8355
     },
     "b7": {
       "base": -333,
       "rail": 10576,
-      "winch": 7767
+      "winch": 8367
     },
     "b8": {
       "base": -192,
       "rail": 9864,
-      "winch": 7844
+      "winch": 8444
     },
     "c1": {
       "base": -1364,
       "rail": 16340,
-      "winch": 7725
+      "winch": 8325
     },
     "c2": {
       "base": -1257,
       "rail": 14842,
-      "winch": 7757
+      "winch": 8357
     },
     "c3": {
       "base": -1126,
       "rail": 13388,
-      "winch": 7789
+      "winch": 8389
     },
     "c4": {
       "base": -1001,
       "rail": 12081,
-      "winch": 7817
+      "winch": 8417
     },
     "c5": {
       "base": -880,
       "rail": 10850,
-      "winch": 7815
+      "winch": 8415
     },
     "c6": {
       "base": -711,
       "rail": 9630,
-      "winch": 7785
+      "winch": 8385
     },
     "c7": {
       "base": -401,
       "rail": 8790,
-      "winch": 7819
+      "winch": 8419
     },
     "c8": {
       "base": -332,
       "rail": 8048,
-      "winch": 7887
+      "winch": 8487
     },
     "d1": {
       "base": -1530,
       "rail": 15242,
-      "winch": 7751
+      "winch": 8351
     },
     "d2": {
       "base": -1428,
       "rail": 13707,
-      "winch": 7774
+      "winch": 8374
     },
     "d3": {
       "base": -1312,
       "rail": 12242,
-      "winch": 7792
+      "winch": 8392
     },
     "d4": {
       "base": -1137,
       "rail": 10928,
-      "winch": 7848
+      "winch": 8448
     },
     "d5": {
       "base": -989,
       "rail": 9769,
-      "winch": 7872
+      "winch": 8472
     },
     "d6": {
       "base": -810,
       "rail": 8405,
-      "winch": 7834
+      "winch": 8434
     },
     "d7": {
       "base": -577,
       "rail": 7319,
-      "winch": 7846
+      "winch": 8446
     },
     "d8": {
       "base": -421,
       "rail": 6424,
-      "winch": 7895
+      "winch": 8495
     },
     "e1": {
       "base": -1702,
       "rail": 14272,
-      "winch": 7772
+      "winch": 8372
     },
     "e2": {
       "base": -1595,
       "rail": 12704,
-      "winch": 7801
+      "winch": 8401
     },
     "e3": {
       "base": -1463,
       "rail": 11173,
-      "winch": 7825
+      "winch": 8425
     },
     "e4": {
       "base": -1294,
       "rail": 9747,
-      "winch": 7868
+      "winch": 8468
     },
     "e5": {
       "base": -1144,
       "rail": 8423,
-      "winch": 7897
+      "winch": 8497
     },
     "e6": {
       "base": -967,
       "rail": 7067,
-      "winch": 7861
+      "winch": 8461
     },
     "e7": {
       "base": -742,
       "rail": 5918,
-      "winch": 7868
+      "winch": 8468
     },
     "e8": {
       "base": -529,
       "rail": 4919,
-      "winch": 7901
+      "winch": 8501
     },
     "f1": {
       "base": -1874,
       "rail": 13381,
-      "winch": 7792
+      "winch": 8392
     },
     "f2": {
       "base": -1765,
       "rail": 11779,
-      "winch": 7832
+      "winch": 8432
     },
     "f3": {
       "base": -1638,
       "rail": 10155,
-      "winch": 7849
+      "winch": 8449
     },
     "f4": {
       "base": -1494,
       "rail": 8578,
-      "winch": 7876
+      "winch": 8476
     },
     "f5": {
       "base": -1349,
       "rail": 7073,
-      "winch": 7921
+      "winch": 8521
     },
     "f6": {
       "base": -1173,
       "rail": 5637,
-      "winch": 7937
+      "winch": 8537
     },
     "f7": {
       "base": -940,
       "rail": 4437,
-      "winch": 7923
+      "winch": 8523
     },
     "f8": {
       "base": -677,
       "rail": 3386,
-      "winch": 7928
+      "winch": 8528
     },
     "g1": {
       "base": -2047,
       "rail": 12516,
-      "winch": 7794
+      "winch": 8394
     },
     "g2": {
       "base": -1949,
       "rail": 10894,
-      "winch": 7849
+      "winch": 8449
     },
     "g3": {
       "base": -1837,
       "rail": 9200,
-      "winch": 7855
+      "winch": 8455
     },
     "g4": {
       "base": -1717,
       "rail": 7527,
-      "winch": 7868
+      "winch": 8468
     },
     "g5": {
       "base": -1594,
       "rail": 5948,
-      "winch": 7940
+      "winch": 8540
     },
     "g6": {
       "base": -1438,
       "rail": 4342,
-      "winch": 8001
+      "winch": 8601
     },
     "g7": {
       "base": -1213,
       "rail": 2942,
-      "winch": 7974
+      "winch": 8574
     },
     "g8": {
       "base": -909,
       "rail": 1627,
-      "winch": 7995
+      "winch": 8595
     },
     "h1": {
       "base": -2225,
       "rail": 11600,
-      "winch": 7770
+      "winch": 8370
     },
     "h2": {
       "base": -2136,
       "rail": 9964,
-      "winch": 7823
+      "winch": 8423
     },
     "h3": {
       "base": -2045,
       "rail": 8277,
-      "winch": 7849
+      "winch": 8449
     },
     "h4": {
       "base": -1949,
       "rail": 6630,
-      "winch": 7875
+      "winch": 8475
     },
     "h5": {
       "base": -1849,
       "rail": 5081,
-      "winch": 7927
+      "winch": 8527
     },
     "h6": {
       "base": -1725,
       "rail": 3544,
-      "winch": 7961
+      "winch": 8561
     },
     "h7": {
       "base": -1520,
       "rail": 1665,
-      "winch": 7963
+      "winch": 8563
     },
     "h8": {
       "base": -1150,
       "rail": 0,
-      "winch": 8050
+      "winch": 8650
     }
   }
 }
