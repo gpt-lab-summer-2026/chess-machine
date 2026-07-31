@@ -259,6 +259,11 @@ class MoveQuality:
     cp_loss: int | None = None   # centipawns lost vs the engine's best move
     is_sacrifice: bool = False
     only_good_move: bool = False
+    best_san: str | None = None  # the move the engine preferred instead (SAN, in the
+                                 # position BEFORE the move). Free -- the multi-PV search
+                                 # already found it -- and it's what turns commentary from
+                                 # "that was a mistake" into "Nf3 would have held the pin".
+                                 # None when the played move WAS the engine's choice.
 
     def noteworthy(self) -> bool:
         return self.label in {"blunder", "mistake", "best", "great", "brilliant"}
@@ -369,6 +374,11 @@ def classify_move_quality(engine: ChessEngine, board_before: chess.Board,
     is_best = move == tops[0].best_move or cp_loss <= _BEST_TOLERANCE
     sac = _offers_material(board_before, move)
     only_good = gap >= _ONLY_MOVE_GAP
+    # What the engine would have played instead -- already known from the multi-PV
+    # search above, so this costs nothing. Only meaningful when it differs.
+    best_san = None
+    if tops[0].best_move != move and tops[0].best_move in board_before.legal_moves:
+        best_san = board_before.san(tops[0].best_move)
 
     if is_best:
         if sac and played_cp >= -30:                  # sound sacrifice -> brilliant
@@ -379,9 +389,9 @@ def classify_move_quality(engine: ChessEngine, board_before: chess.Board,
             return MoveQuality("best", cp_loss)        # clearly best; book moves stay quiet
         return MoveQuality("normal", cp_loss)          # many moves were fine -> nothing to say
     if cp_loss >= _BLUNDER_CP:
-        return MoveQuality("blunder", cp_loss)
+        return MoveQuality("blunder", cp_loss, best_san=best_san)
     if cp_loss >= _MISTAKE_CP:
-        return MoveQuality("mistake", cp_loss)
+        return MoveQuality("mistake", cp_loss, best_san=best_san)
     return MoveQuality("normal", cp_loss)
 
 

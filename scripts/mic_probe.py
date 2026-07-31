@@ -117,16 +117,23 @@ def _vad_transcribe(url: str) -> int:
     cap = NetworkMicCapture(cfg.stt, cfg.audio)
     print("Loading Whisper model (once)...")
     from faster_whisper import WhisperModel
-    model = WhisperModel(cfg.stt.model, device=cfg.stt.device, compute_type=cfg.stt.compute_type)
+
+    from chessmachine.voice.stt import DistilWhisperSTT
+    model = WhisperModel(cfg.stt.model, device=cfg.stt.device,
+                         compute_type=cfg.stt.compute_type, cpu_threads=cfg.stt.cpu_threads)
+    # Transcribe through the production STT (skip __init__ so no mic is opened) so
+    # this probe reflects the game's real audio prep + decode params, not a
+    # separate transcribe call that could drift from them.
+    stt = DistilWhisperSTT.__new__(DistilWhisperSTT)
+    stt.cfg = cfg.stt
+    stt.model = model
 
     print(">>> SPEAK a chess command now (e.g. 'knight to f3')...")
     samples = cap.record_utterance()
     if samples.size == 0:
         print("no speech captured (VAD heard nothing). Speak louder/closer, or raise the app gain.")
         return 1
-    segs, _ = model.transcribe(samples, language=cfg.stt.language, beam_size=cfg.stt.beam_size,
-                               vad_filter=True, initial_prompt=cfg.stt.prompt or None)
-    text = " ".join(s.text.strip() for s in segs).strip()
+    text = stt.transcribe(samples)
     print(f"captured {samples.size / 16000:.1f}s")
     print("TRANSCRIPT:", repr(text) if text else "(empty)")
     return 0 if text else 1

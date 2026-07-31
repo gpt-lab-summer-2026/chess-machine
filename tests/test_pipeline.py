@@ -26,6 +26,7 @@ def make(auto_reply=True, play_as="black"):
     cfg.motion.backend = "mock"
     cfg.motion.speeds.settle_ms = 0
     cfg.motion.magnet.settle_ms = 0
+    cfg.tts.keep_alive = False        # no real speaker here; don't spawn a pw-play stream
     tts = CaptureTTS()
     machine = ChessMachine(
         config=cfg, stt=StdinSTT(), tts=tts,
@@ -468,3 +469,36 @@ def test_deferred_self_critique_waits_on_machines_own_move():
     bb = chess.Board()   # white (machine) to move -> not the opponent yet
     assert m._resolve_self_critique(bb) == ""
     assert m._pending_self_critique is not None        # still held, waiting for the human's reply
+
+
+# -- sequential interaction (speak, THEN move) ------------------------------- #
+def test_sequential_actuation_speaks_before_the_crane_moves():
+    """Default flow is one-thing-at-a-time: the machine says the move fully before
+    any head motion, so speech and the crane never overlap."""
+    m, _ = make(auto_reply=False)
+    assert m.cfg.app.concurrent_actuation is False        # the hardened default
+    timeline: list[str] = []
+    orig_say, orig_move = m.tts.say, m.choreo.ctl.move_xz
+    m.tts.say = lambda t: (timeline.append("say"), orig_say(t))[1]
+    m.choreo.ctl.move_xz = lambda *a, **k: (timeline.append("move"), orig_move(*a, **k))[1]
+    m.handle("e4")                                        # a plain move: nothing to discard first
+    assert "say" in timeline and "move" in timeline
+    assert timeline.index("say") < timeline.index("move")  # spoke before moving
+
+
+def test_promotion_note_spoken_after_the_piece_is_placed():
+    """A promotion with no spare piece asks the human to swap it in; that note must
+    still be spoken (now AFTER the crane places the pawn, not before)."""
+    m, tts = make(auto_reply=False)
+    m.game.reset(start_fen="4k3/P7/8/8/8/8/8/4K3 w - - 0 1")   # white pawn on a7
+    m.handle("a7 to a8")
+    assert m.game.history[-1][1].startswith("a8=Q")
+    assert any("replace the pawn" in l.lower() for l in tts.lines)
+
+
+def test_concurrent_actuation_still_available_as_opt_in():
+    m, _ = make(auto_reply=False)
+    m.cfg.app.concurrent_actuation = True
+    m.handle("e4")
+    assert m.game.history[-1][1] == "e4"                  # opt-in path still actuates + applies
+    assert any(op[0] == "move" for op in m.choreo.ctl.ops)

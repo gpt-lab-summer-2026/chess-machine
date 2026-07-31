@@ -39,8 +39,34 @@ The default config uses llama.cpp in **server** mode. Build llama.cpp (or
 `pip install llama-cpp-python[server]`) and start it:
 
 ```bash
-llama-server -m models/slm/Llama-3.2-3B-Instruct-Q4_K_M.gguf -c 4096 --port 8080
+llama-server -m models/slm/Llama-3.2-3B-Instruct-Q4_K_M.gguf \
+  -c 2048 --parallel 1 -t 3 --cache-reuse 256 --host 127.0.0.1 --port 8080
 ```
+
+**`--parallel 1` is not optional on a Pi.** Without it llama-server auto-selects
+`n_parallel = 4`, which does two bad things:
+
+- It allocates **4 × `-c`** worth of f16 KV cache. At 112 KiB/token for this model
+  that is ~900 MiB instead of ~225 MiB (most of the 4.3 GiB RSS people report).
+- Prompt cache is **per slot**. The client sends `cache_prompt: true` and the app
+  warms the ~750-token system+few-shot prefix at startup, but that primes exactly
+  one slot; requests then round-robin into cold ones and re-prefill the whole
+  prompt at ~15 tok/s (~50 s). One slot means the warm prefix is always hit.
+
+`-t 3` leaves a core for whisper/Kokoro; measured `pp774` was 15.6 tok/s at 3
+threads vs 13.6 at 4. Verify the KV size and slot count after starting:
+
+```bash
+curl -s localhost:8080/props | python3 -c \
+  "import json,sys; d=json.load(sys.stdin); print('slots', d['total_slots'], \
+   'n_ctx', d['default_generation_settings']['n_ctx'])"   # expect: slots 1 n_ctx 2048
+```
+
+Do **not** bother with `GGML_VULKAN` (the Pi's V3D is ~80-100x slower than the CPU
+for this and won't initialize), `GGML_CPU_KLEIDIAI` (no Q4_K kernels, and slower
+where kernels exist), or `GGML_BLAS`. A plain
+`cmake -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON` build is already optimal here —
+`GGML_CPU_REPACK` (on by default) covers Q4_K on the A76's dotprod path.
 
 Prefer in-process instead? Set `slm.mode: inproc` and `slm.model_path`, and
 `pip install '.[slm]'`. Your QLoRA fine-tune: merge the adapter, convert to GGUF,
@@ -92,7 +118,7 @@ After=network.target
 [Service]
 User=pi
 WorkingDirectory=/home/pi/chess-machine
-ExecStart=/usr/local/bin/llama-server -m models/slm/model.gguf -c 4096 --port 8080
+ExecStart=/usr/local/bin/llama-server -m models/slm/Llama-3.2-3B-Instruct-Q4_K_M.gguf -c 2048 --parallel 1 -t 3 --cache-reuse 256 --host 127.0.0.1 --port 8080
 Restart=on-failure
 
 [Install]

@@ -12,6 +12,7 @@ import contextlib
 import logging
 import re
 import threading
+import time
 
 import chess
 
@@ -42,6 +43,11 @@ HELP_TEXT = (
     "or say 'new game'."
 )
 QUIT_WORDS = {"quit", "exit", "stop", "goodbye", "q"}
+# A real listen window blocks on the mic for up to audio.vad.max_utterance_s, so an
+# empty one returning faster than this means the capture path failed rather than
+# simply hearing nothing.
+_FAST_EMPTY_WINDOW_S = 1.0
+_EMPTY_WINDOW_BACKOFF_S = 1.0
 _AFFIRM_WORDS = {
     "yes", "yeah", "yep", "yup", "sure", "ok", "okay", "confirm", "affirmative", "please",
 }
@@ -81,6 +87,11 @@ class ChessMachine:
 
     # -- lifecycle ----------------------------------------------------------- #
     def start(self, home: bool = True) -> None:
+        # FIRST thing, before anything is spoken: wake the speaker's amplifier and
+        # keep it awake. Homing and the SLM warm-up below take seconds, so by the
+        # time we say "Chess machine ready" the amp is long since up and the
+        # leading "Ch" survives.
+        self._start_keep_alive()
         self.choreo.connect()
         if home:
             self.choreo.home()
@@ -95,8 +106,10 @@ class ChessMachine:
             self._do_engine_move("I'll open with")
 
     def run(self) -> None:
+        empty_windows = 0
         try:
             while True:
+                window_start = time.monotonic()
                 # Cue "Your move." right before we open the mic, so the prompt
                 # finishes speaking just as recording begins (once per human turn).
                 self._prompt_move_if_new_turn()
@@ -104,11 +117,25 @@ class ChessMachine:
                 # machine work (STT/SLM/actuation/speech) is off their clock.
                 self.clock.start_user()
                 self._led("on")               # solid = mic is open, speak now
+                self._cue_listening()         # + an audible earcon the instant we open the mic
                 transcript = self.stt.listen()  # on_capture_done -> "blink" mid-call
                 self._led("blink")            # (idempotent) blinking = working on it
                 self.clock.stop_user()
                 if not transcript:
+                    # A healthy silent window already cost ~25 s of blocking mic
+                    # reads, so re-entering at once is fine. A BROKEN mic, though,
+                    # returns instantly -- and this loop had no backoff, so it would
+                    # spin the open/read/close cycle at 100% CPU forever. Throttle
+                    # once the empty windows start coming back too fast to be real.
+                    empty_windows += 1
+                    if time.monotonic() - window_start < _FAST_EMPTY_WINDOW_S:
+                        if empty_windows in (3, 30) or empty_windows % 300 == 0:
+                            log.warning("%d empty mic windows, each under %.1fs -- is the "
+                                        "microphone working? Backing off.",
+                                        empty_windows, _FAST_EMPTY_WINDOW_S)
+                        time.sleep(_EMPTY_WINDOW_BACKOFF_S)
                     continue
+                empty_windows = 0
                 if transcript.strip().lower() in QUIT_WORDS:
                     self._say("Goodbye.")
                     break
@@ -123,9 +150,32 @@ class ChessMachine:
             self.close()
 
     def close(self) -> None:
-        for fn in (self._park, self.choreo.close, self.engine.close, self.nlu.close):
+        for fn in (self._stop_keep_alive, self._park, self.choreo.close,
+                   self.engine.close, self.nlu.close):
             with contextlib.suppress(Exception):
                 fn()
+
+    def _start_keep_alive(self) -> None:
+        """Hold the Bluetooth speaker's amp awake for the whole session, so no
+        utterance loses its first syllable. Best-effort: no pw-play (dev boxes) or
+        no BT speaker simply means no keep-alive."""
+        self._keep_alive = None
+        # Nothing to keep awake unless we actually play audio through a speaker:
+        # --dev/stdout TTS and the test fixtures must not spawn a pw-play stream.
+        if not self.cfg.tts.keep_alive or self.cfg.tts.backend != "kokoro":
+            return
+        try:
+            from .voice.audio import SpeakerKeepAlive
+            ka = SpeakerKeepAlive(level=self.cfg.tts.keep_alive_level)
+            if ka.start():
+                self._keep_alive = ka
+        except Exception:  # noqa: BLE001 - never block startup on a comfort stream
+            log.debug("speaker keep-alive failed to start", exc_info=True)
+
+    def _stop_keep_alive(self) -> None:
+        ka, self._keep_alive = getattr(self, "_keep_alive", None), None
+        if ka is not None:
+            ka.stop()
 
     def _park(self) -> None:
         self.choreo.park()
@@ -152,6 +202,24 @@ class ChessMachine:
             fn(mode)
         except Exception:  # noqa: BLE001 - indicator only
             log.debug("status LED %s failed", mode, exc_info=True)
+
+    def _cue_listening(self) -> None:
+        """Play a short earcon the moment the mic opens, so the user has an
+        unmistakable 'speak now' signal (the spoken prompt + LED were easy to
+        miss). Best-effort: a cue must never break the loop, and it no-ops where
+        there is no audio device (dev/CI) or when disabled in config."""
+        if not self.cfg.audio.listen_beep:
+            return
+        try:
+            from .voice.audio import make_beep, play
+            sr = self.cfg.tts.sample_rate
+            # The prompt was just spoken, so the amp is warm -> a tiny lead-in is
+            # enough; then a short gap lets the (Bluetooth-buffered) beep finish
+            # emitting before we record, so the mic doesn't capture its own echo.
+            play(make_beep(sr), sr, lead_in_s=0.08)
+            time.sleep(0.2)
+        except Exception:  # noqa: BLE001 - a cue must never interrupt a game
+            log.debug("listening cue failed", exc_info=True)
 
     def _prompt_move_if_new_turn(self) -> None:
         """Speak "Your move." once at the start of each human turn, right before
@@ -426,38 +494,31 @@ class ChessMachine:
             return self._say("I couldn't re-home the crane; positions may have drifted.")
 
     def _play_move(self, move: chess.Move, prefix: str) -> str:
-        """Actuate, narrate, and speak a move. With concurrent actuation the
-        crane carries the piece while we compute and speak the explanation —
-        the captured piece (if any) is always cleared first. Speaks internally."""
+        """Actuate, narrate, and speak a move — speaking internally.
+
+        SEQUENTIAL by default (app.concurrent_actuation off): the machine says what
+        it is doing and only THEN drives the crane, so speech and motion never
+        overlap and the turn reads as one step at a time. A capture's discard still
+        runs up front — that is where a move can be refused for lack of storage —
+        but for a plain move nothing moves before we speak. Set concurrent_actuation
+        to speak WHILE the crane runs, trading legibility for speed."""
         board_before = self.game.board.copy()
-        # LED off for the whole actuation: hands off the board while the crane runs.
-        # Sent BEFORE the first motion command, because a blocking GOTO holds the
-        # serial link and we could not update the LED mid-move.
+        # LED off for the whole move: hands off the board until the crane is done.
         self._led("off")
-        # Whose move this is (the side to move vs. the machine's colour). The
-        # relay prototype uses it to pick a motor direction; the crane ignores it.
+        # Whose move this is (side to move vs. machine colour): the relay prototype
+        # uses it to pick a motor direction; the crane ignores it.
         mover_is_machine = board_before.turn == self.game.machine_color
-        # Promotions can prompt for a manual piece swap mid-actuation, so their
-        # notes aren't known until the crane finishes — run those synchronously.
-        concurrent = self.cfg.app.concurrent_actuation and move.promotion is None
-        motion: threading.Thread | None = None
-        motion_result: dict | None = None
-        if concurrent:
-            complete, report = self.choreo.begin_move(board_before, move, mover_is_machine)   # discard now (blocks)
-            if not report.aborted:
-                motion, motion_result = self._spawn_motion(complete)
-        else:
-            report = self.choreo.execute_move(board_before, move, mover_is_machine)
+        # Clear any captured piece to storage NOW (blocking) and learn whether the
+        # move is even possible, WITHOUT yet moving the piece itself. For a plain
+        # move this touches no motor, so nothing moves before we speak.
+        complete, report = self.choreo.begin_move(board_before, move, mover_is_machine)
         if report.aborted:
-            # Actuation refused before touching the board (e.g. storage full).
-            # Do NOT apply the move, so the logical and physical boards stay in sync.
-            return self._say(" ".join(report.notes)
-                             or "I can't make that move right now.")
+            # Refused before touching the board (e.g. storage full). Do NOT apply the
+            # move, so the logical and physical boards stay in sync.
+            return self._say(" ".join(report.notes) or "I can't make that move right now.")
 
         san = self.game.push(move)
         text = f"{prefix} {speak_san(san)}."
-        if report.notes:
-            text += " " + " ".join(report.notes)
         comment = self._move_comment(board_before, move, san)
         if comment:
             text += " " + comment
@@ -469,22 +530,39 @@ class ChessMachine:
         if self.game.is_game_over():
             text += " " + self.game.result_text()
 
-        self._say(text)                 # spoken while the crane is still moving
+        # Promotions can add a manual-swap note DURING the crane's travel, so they
+        # never run concurrently; that note is spoken afterwards (below).
+        concurrent = self.cfg.app.concurrent_actuation and move.promotion is None
         finished_ok = True
-        if motion is not None:
+        if concurrent:
+            motion, motion_result = self._spawn_motion(complete)
+            self._say(text)             # spoken while the crane is still moving
             motion.join()               # don't begin the next move until actuation is done
-            if motion_result is not None and motion_result["error"] is not None:
-                # The move is already applied logically, but the crane didn't
-                # finish — flag the possible desync rather than swallowing it.
+            finished_ok = motion_result["error"] is None
+        else:
+            self._say(text)             # say the move first...
+            try:
+                complete()              # ...then run the crane to completion (blocking)
+            except Exception:  # noqa: BLE001 - reported below, never crashes the turn
+                log.exception("Actuation failed during the move")
                 finished_ok = False
-                self._say("I couldn't finish moving that piece — please check the "
-                          "board matches the position before we continue.")
+        # A note produced during actuation (e.g. a promotion with no spare piece:
+        # "replace the pawn on a8 with a queen") is spoken now, AFTER the crane has
+        # placed the pawn, so it refers to a state that actually exists.
+        if finished_ok and report.notes:
+            note = " ".join(report.notes)
+            self._say(note)
+            text += " " + note
+        if not finished_ok:
+            # The move is already applied logically, but the crane didn't finish —
+            # release the magnet and flag the possible desync rather than hiding it.
+            self._safe_park()
+            self._say("I couldn't finish moving that piece — please check the "
+                      "board matches the position before we continue.")
         # Re-home to re-zero open-loop drift. Skip it if actuation didn't finish, so
-        # we don't drag a stuck piece. Three triggers (any fires): every finished move
-        # (rehome_after_move); after a capture (rehome_on_capture — the biggest drift
-        # source, an extra pick-and-place); or every N finished moves
-        # (rehome_every_n_moves). With the base limit switch, drift is bounded, so the
-        # every-N cadence gives accuracy without homing (~20-30 s each) on every turn.
+        # we don't drag a stuck piece. Triggers (any fires): every finished move
+        # (rehome_after_move); after a capture (rehome_on_capture); or every N finished
+        # moves (rehome_every_n_moves).
         if finished_ok:
             self._moves_since_home += 1
             due = (self.cfg.app.rehome_after_move
@@ -493,11 +571,9 @@ class ChessMachine:
                        and self._moves_since_home >= self.cfg.app.rehome_every_n_moves))
             if due:
                 self._rehome()          # silent unless it fails (resets the counter)
-        # Hand the turn back out loud once the move (and any re-home) is finished, so
-        # the player knows it's on them and we're about to start listening. Only when
-        # a completed move leaves THEM on move — not still our turn, not at game over.
-        if finished_ok and not self.game.is_game_over() and not self.game.is_machine_turn():
-            self._say("Your move.")
+        # The "Your move." hand-back is spoken by the run loop right before the mic
+        # opens (_prompt_move_if_new_turn), so there is exactly ONE listening cue and
+        # it lands immediately before recording — not here, where it used to double up.
         return text
 
     def _spawn_motion(self, complete) -> tuple[threading.Thread, dict]:
@@ -548,7 +624,19 @@ class ChessMachine:
                 "san": san,
                 "mover": GameState.color_name(mover),
                 "mover_is_machine": mover_is_machine,
+                # Grounded specifics so the reaction can be about the POSITION rather
+                # than a restatement of the verdict (which made every comment sound
+                # the same). All free: no extra engine call.
+                "best_san": quality.best_san,
+                "move_kind": self._describe_move(board_before, move, board_after),
+                "phase": analysis.game_phase(board_after),
             }
+            mat = analysis.material_balance(board_after)
+            if mat and mat["leader"] != "even":
+                info["material"] = (f"{mat['leader']} is up {abs(mat['diff'])} "
+                                    f"point{'s' if abs(mat['diff']) != 1 else ''}")
+            elif mat:
+                info["material"] = "level"
             # C: don't flag the machine's OWN blunder/mistake right away — hold it
             # back and only voice it if the opponent actually punishes it (checked
             # after their reply in _resolve_self_critique). Machine's good moves
@@ -565,6 +653,35 @@ class ChessMachine:
         except Exception:  # noqa: BLE001 - commentary must never break a move
             log.exception("Move commentary failed")
             return ""
+
+    @staticmethod
+    def _describe_move(board_before: chess.Board, move: chess.Move,
+                       board_after: chess.Board) -> str:
+        """Plain description of what the move DID (capture, check, castle, ...).
+
+        Purely mechanical, straight off the board -- no engine, no invention. Gives
+        the commentary something concrete to talk about besides the verdict, which
+        is what made every reaction sound identical.
+        """
+        parts = []
+        if board_before.is_castling(move):
+            parts.append("castles")
+        elif board_before.is_capture(move):
+            taken = board_before.piece_at(move.to_square)
+            # en passant has no piece on the destination square
+            name = chess.piece_name(taken.piece_type) if taken else "pawn"
+            parts.append(f"captures a {name}")
+        if move.promotion:
+            parts.append(f"promotes to a {chess.piece_name(move.promotion)}")
+        if board_after.is_checkmate():
+            parts.append("delivers checkmate")
+        elif board_after.is_check():
+            parts.append("gives check")
+        if not parts:
+            piece = board_before.piece_at(move.from_square)
+            if piece is not None:
+                parts.append(f"a quiet {chess.piece_name(piece.piece_type)} move")
+        return ", ".join(parts)
 
     def _resolve_self_critique(self, board_before: chess.Board) -> str:
         """Voice a held-back self-critique iff the move just played (by the

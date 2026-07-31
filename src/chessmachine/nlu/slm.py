@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING, Any
@@ -23,6 +24,15 @@ if TYPE_CHECKING:
     from ..chess_engine.analysis import PositionFacts
 
 log = logging.getLogger(__name__)
+
+# A small model will invent a set_side/set_difficulty from the "State:" line or
+# from noise, so honor those actions only when the transcript ACTUALLY names a
+# color/side or a difficulty -- the same "ground it in what the user literally
+# said" rule the pipeline already applies to moves.
+_SIDE_CUE = re.compile(r"\b(white|black|sides?|colou?rs?|swap|switch|teams?)\b")
+_DIFF_CUE = re.compile(r"\b(easy|medium|hard(?:er)?|easier|difficult\w*|level|elo|\d{3,4})\b")
+# recalibrate moves the crane (a 20-30 s sweep), so noise must not trigger it either.
+_RECAL_CUE = re.compile(r"\b(home|calibrat\w*|cent\w*|align\w*|drift|recalibrate)\b")
 
 
 class LlamaCppClient:
@@ -153,6 +163,7 @@ class SlmNLU(NLU):
                 )
                 intents = intents_from_json(_extract_json(raw), transcript)
                 intents = [self._guard(i, transcript) for i in intents]
+                intents = self._drop_contradictory(intents)
                 known = [i for i in intents if i.action != "unknown"]
                 if known:
                     return known
@@ -167,11 +178,31 @@ class SlmNLU(NLU):
 
     @staticmethod
     def _guard(intent: Intent, transcript: str) -> Intent:
-        """Downgrade a misclassified question to analyze. STT-robust; only ever
-        turns opponent_move into analyze, so real moves are never touched."""
+        """Keep the SLM honest against the literal transcript. Downgrades a
+        misclassified question to analyze, and drops a set_side/set_difficulty the
+        user's words don't support (a small model emits those from the State line
+        or from noise -- e.g. room noise -> set_side, or every move -> "difficulty
+        medium"). Only ever REMOVES unsupported actions; real ones pass untouched."""
+        text = (transcript or "").lower()
         if intent.action == "opponent_move" and looks_like_analysis(transcript):
             return Intent(action="analyze", question=transcript, text=transcript)
+        if intent.action == "set_side" and not _SIDE_CUE.search(text):
+            return Intent(action="unknown", text=transcript)
+        if intent.action == "set_difficulty" and not _DIFF_CUE.search(text):
+            return Intent(action="unknown", text=transcript)
+        if intent.action == "recalibrate" and not _RECAL_CUE.search(text):
+            return Intent(action="unknown", text=transcript)
         return intent
+
+    @staticmethod
+    def _drop_contradictory(intents: list[Intent]) -> list[Intent]:
+        """The robot auto-replies after the human's move, so one utterance can't be
+        BOTH the human's move AND a request for the engine to move. When the model
+        emits both (its habitual "...and now I move" over-generation), keep the
+        human's move and drop the engine_move."""
+        if any(i.action == "opponent_move" for i in intents):
+            return [i for i in intents if i.action != "engine_move"]
+        return intents
 
     def phrase_analysis(self, question: str, facts: PositionFacts) -> str:
         try:

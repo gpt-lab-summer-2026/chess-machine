@@ -33,26 +33,32 @@ def _bar(x: float, width: int = 40) -> str:
     return "#" * n + "-" * (width - n)
 
 
+def _capture_rate(cfg) -> int:
+    """The rate the mic is actually opened at (mirrors AudioCapture._capture_rate)."""
+    return cfg.audio.capture_rate or cfg.audio.sample_rate
+
+
 def show_devices(cfg) -> int:
     import sounddevice as sd
     want = cfg.audio.input_device
-    print(f"configured audio.input_device = {want!r}   sample_rate = {cfg.audio.sample_rate}")
+    rate = _capture_rate(cfg)
+    print(f"configured audio.input_device = {want!r}")
+    print(f"  capture_rate = {rate} Hz (mic)  ->  sample_rate = {cfg.audio.sample_rate} Hz (whisper)")
     print(f"PortAudio default (in, out)   = {sd.default.device}")
     print("\ninput devices:")
     for i, d in enumerate(sd.query_devices()):
         if d["max_input_channels"] > 0:
             print(f"  [{i}] ch={d['max_input_channels']:<3} native={d['default_samplerate']:.0f}Hz"
                   f"  {d['name']}")
-    print(f"\ncan the configured device do {cfg.audio.sample_rate} Hz mono int16?")
+    print(f"\ncan the configured device do {rate} Hz mono int16?")
     try:
-        sd.check_input_settings(device=want, samplerate=cfg.audio.sample_rate,
-                                channels=1, dtype="int16")
+        sd.check_input_settings(device=want, samplerate=rate, channels=1, dtype="int16")
         print("  OK")
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"  FAIL: {exc}")
-        print("  A raw USB device (hw:N,0) often supports only 44.1/48 kHz. Set")
-        print("  audio.input_device: default  so ALSA/PipeWire resamples to 16 kHz.")
+        print("  Set audio.capture_rate to a rate the device supports (one of webrtcvad's")
+        print("  8000/16000/32000/48000), or audio.input_device: default to let PipeWire adapt.")
         return 1
 
 
@@ -60,7 +66,7 @@ def level_meter(cfg, seconds: float) -> int:
     import numpy as np
     import sounddevice as sd
 
-    sr = cfg.audio.sample_rate
+    sr = _capture_rate(cfg)          # meter the RAW hardware, at the rate we open it
     blk = int(sr * 0.1)
     print(f"level meter: {seconds:g}s at {sr} Hz — make some noise (Ctrl-C to stop)")
     peak_all = 0.0
@@ -84,7 +90,7 @@ def level_meter(cfg, seconds: float) -> int:
     return 0
 
 
-def capture_once(cfg, cap, transcribe, model, save: str | None) -> str:
+def capture_once(cfg, cap, stt, save: str | None) -> str:
     import numpy as np
 
     print("\n>>> SPEAK NOW (e.g. \"knight to f3\"), then pause ~1s ...")
@@ -104,12 +110,12 @@ def capture_once(cfg, cap, transcribe, model, save: str | None) -> str:
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
             w.writeframes(pcm.tobytes())
         print(f"  saved {save}   (play it back: pw-play {save})")
-    if not transcribe:
+    if stt is None:
         return ""
-    segs, _info = model.transcribe(x, language=cfg.stt.language,
-                                   beam_size=cfg.stt.beam_size, vad_filter=True,
-                                   initial_prompt=cfg.stt.prompt or None)
-    text = " ".join(s.text.strip() for s in segs).strip()
+    # Transcribe through the SAME method the game uses (DistilWhisperSTT.transcribe),
+    # so this reflects the real level-normalization, padding, beam size, and
+    # vad_filter setting — not a hand-rolled transcribe call that could drift from it.
+    text = stt.transcribe(x)
     print(f"  TRANSCRIPT: {text!r}" if text else
           "  TRANSCRIPT: (empty — audio captured but Whisper found no words)")
     return text
@@ -130,6 +136,7 @@ def main(argv=None) -> int:
     cfg = load_config(args.config)
     print(f"stt.backend = {cfg.stt.backend}   input_device = {cfg.audio.input_device!r}"
           f"   vad aggressiveness = {cfg.audio.vad.aggressiveness}")
+    print(f"capture {_capture_rate(cfg)} Hz -> whisper {cfg.audio.sample_rate} Hz")
 
     if args.devices:
         return show_devices(cfg)
@@ -141,10 +148,10 @@ def main(argv=None) -> int:
         import sounddevice as sd
         try:
             sd.check_input_settings(device=cfg.audio.input_device,
-                                    samplerate=cfg.audio.sample_rate,
+                                    samplerate=_capture_rate(cfg),
                                     channels=1, dtype="int16")
         except Exception as exc:  # noqa: BLE001
-            print(f"\nthe configured input can't do {cfg.audio.sample_rate} Hz mono: {exc}")
+            print(f"\nthe configured input can't do {_capture_rate(cfg)} Hz mono: {exc}")
             print("run --devices for the fix")
             return 1
 
@@ -152,18 +159,25 @@ def main(argv=None) -> int:
     cap = create_capture(cfg.stt, cfg.audio)
     print(f"capture = {type(cap).__name__}")
 
-    model = None
+    stt = None
     if not args.vad:
         print(f"loading Whisper ({cfg.stt.model}, {cfg.stt.device}/{cfg.stt.compute_type}) "
               f"— takes a few seconds...")
         from faster_whisper import WhisperModel
+
+        from chessmachine.voice.stt import DistilWhisperSTT
         model = WhisperModel(cfg.stt.model, device=cfg.stt.device,
-                             compute_type=cfg.stt.compute_type)
+                             compute_type=cfg.stt.compute_type, cpu_threads=cfg.stt.cpu_threads)
+        # Wrap the model in the production STT (skip __init__ so no mic is opened)
+        # to reuse its exact transcribe path — same audio prep and decode params.
+        stt = DistilWhisperSTT.__new__(DistilWhisperSTT)
+        stt.cfg = cfg.stt
+        stt.model = model
 
     got = ""
     try:
         while True:
-            got = capture_once(cfg, cap, model is not None, model, args.save)
+            got = capture_once(cfg, cap, stt, args.save)
             if not args.loop:
                 break
             print("  (Ctrl-C to stop)")

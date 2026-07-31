@@ -6,36 +6,67 @@ app:
   play_as: black            # color the MACHINE plays: white | black
   auto_reply: true          # after the opponent's move, immediately make ours
   confirm_moves: true       # speak each move as it is executed
-  concurrent_actuation: true # speak the move + explanation while the crane moves
-                             # (a capture's discard always finishes first)
+  concurrent_actuation: false # OFF = one thing at a time: speak the move fully, THEN move the
+                             # crane. Set true to speak while the crane runs (faster, less legible).
   match_clock: true         # track the human's thinking time only (ask "status"/"score")
   rehome_after_move: false   # the base limit switch bounds drift, so don't home every turn
   rehome_every_n_moves: 10   # instead, re-home every 10 finished machine moves (~20-30 s each)
   log_level: INFO
 
 audio:
-  input_device: default     # ALSA/PipeWire plug device -- NOT the raw USB mic.
-                            # The AK5370 USB mic's hw:2,0 only does 44.1/48 kHz and
-                            # REJECTS the 16 kHz whisper needs (PaErrorCode -9997);
-                            # "default" resamples. Don't pin this to "AK5370"/hw:2,0.
+  input_device: Trust       # substring-matched against the PortAudio device name, so it
+                            # survives card renumbering on replug (hw:2,0 today, hw:3,0
+                            # tomorrow). Currently the Trust GXT234 YUNIX USB mic.
+                            # MUST be pinned, NOT "default": the BT speaker (BTL-324)
+                            # publishes its own HSP mic, and PipeWire made THAT the
+                            # default source -- recording from it is both near-silent
+                            # (rms 0.0008 vs 0.015 on the Trust) and forces the speaker
+                            # out of A2DP into 8 kHz narrowband, wrecking playback too.
+                            # Like the old AK5370, this mic does 44.1/48 kHz ONLY and
+                            # REJECTS the 16 kHz whisper needs (PaErrorCode -9997) --
+                            # hence capture_rate below, never sample_rate.
   output_device: null       # unused: playback goes via pw-play (see voice/audio.py)
-  sample_rate: 16000        # whisper wants 16 kHz mono
+  sample_rate: 16000        # what WHISPER is fed. Fixed by the model -- leave at 16000.
+  capture_rate: 48000       # what the MIC is opened at: its native rate. We capture full-rate
+                            # and downsample ourselves (anti-aliased, voice/audio.resample)
+                            # instead of letting PipeWire's resampler do it unseen.
+                            # Must be one of webrtcvad's 8/16/32/48 kHz.
+  listen_beep: true         # short earcon the instant the mic opens = "speak now"
   vad:
     enabled: true
-    aggressiveness: 2       # 0..3
+    aggressiveness: 3       # 0..3, higher = rejects more non-speech. MEASURED on this mic over
+                            # 6 s of empty room: agg 2 mislabelled 38/200 frames as speech,
+                            # agg 3 only 9/200. Those blips are what held the mic open.
     silence_ms: 1500        # trailing silence that ends an utterance. 800 cut people
                             # off mid-phrase ("knight to... f3"); 1500 tolerates a pause.
+    end_tolerance: 0.15     # stray "speech" frames tolerated inside that trailing window.
+                            # Requiring 1500 ms of CONSECUTIVE silence never fired in a real
+                            # room, so every command ran to max_utterance_s (7.4 s of audio
+                            # into whisper). 0.0 = old strict behaviour.
     min_speech_ms: 250      # ignore blips shorter than this (avoids phantom moves)
-    max_utterance_s: 25.0   # WHOLE window, including the wait for speech to start --
-                            # not just how long you may talk. 15 was tight once you
-                            # add think-time before speaking.
+    max_utterance_s: 7.0    # HARD cap on the whole listen window: the mic cuts off here even
+                            # if you keep talking, so each turn is bounded. Speak promptly after
+                            # the beep. VAD still ends it earlier on trailing silence.
 
 stt:
   backend: distil_whisper   # distil_whisper (USB mic via sounddevice) | esp32_whisper (MAX4466 serial) | network_whisper (phone over WiFi, see docs/phone_mic_setup.md) | stdin (dev)
-  model: distil-small.en    # faster-whisper alias -> CTranslate2 (use distil-medium.en for accuracy)
+  model: distil-small.en      # faster-whisper alias -> CTranslate2. distil-large-v3.5 is
+                              # 26-29 s/utterance on this CPU (vs 6.2 s) -- don't go back.
   device: cpu
-  compute_type: int8
+  compute_type: int8          # CPU: int8 | int8_float32 | float32 only. int8_float16 is CUDA-only and raises.
+  cpu_threads: 3              # 3 beats 4 on a 4-core Pi 5 (measured); leaves a core for llama-server
   language: en
+  # Anti-hallucination on short/quiet commands. distil-small.en hallucinates on
+  # quiet input ("d2 to d4" -> "to do four"); these recover it at no extra latency
+  # (measured 2026-07-30). Tune with scripts/mictest.py --save + pw-play to hear
+  # the actual capture, and mictest.py to see the transcript.
+  beam_size: 5               # beam search, not greedy (=1). ~free here, far more robust.
+  normalize: true            # level-normalize each utterance; Whisper hallucinates when it's quiet
+  target_rms: 0.12           # normalize toward this loudness (gain capped so it never clips)
+  pad_ms: 200                # frame the clip with silence so a short command isn't clipped
+  vad_filter: false          # capture already VAD-gates (webrtcvad); Whisper's internal Silero VAD
+                             # double-trimmed short clips and mangled them. true only if room noise
+                             # starts getting transcribed on false triggers.
 
 tts:
   backend: kokoro           # kokoro | stdout (dev)
@@ -43,6 +74,19 @@ tts:
   speed: 1.0
   model_path: models/kokoro/kokoro-v1.0.onnx
   voices_path: models/kokoro/voices-v1.0.bin
+  intra_op_threads: 2       # onnxruntime would otherwise take all 4 cores and spin while idle
+  # Clipped first syllable ("chess machine ready" -> "ess machine ready"): the BTL-324
+  # powers its amplifier down between utterances. keep_alive is the actual fix --
+  # a silent lead_in can't wake a signal-detect amp, because silence is what put it
+  # to sleep. Tune: python scripts/tts_leadin_test.py --keepalive
+  keep_alive: true          # stream inaudible noise continuously so the amp never sleeps
+  keep_alive_level: 0.002   # ~-54 dBFS. RAISE (0.004, 0.01) if the first syllable is STILL
+                            # clipped; LOWER if you can hear hiss between utterances.
+  lead_in_s: 0.5            # silence before each clip. Belt-and-suspenders now that keep_alive
+                           # holds the amp up -- once that's confirmed working, drop this to
+                           # 0.15 to make every reply snappier.
+  lead_in_primer: false    # true = fill the lead-in with inaudible noise instead of silence
+                           # (only useful if you turn keep_alive off)
 
 slm:
   backend: llama_cpp        # llama_cpp | rule_based (dev/fallback, no model)
