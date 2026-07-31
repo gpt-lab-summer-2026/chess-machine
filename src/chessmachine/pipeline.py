@@ -624,7 +624,19 @@ class ChessMachine:
                 "san": san,
                 "mover": GameState.color_name(mover),
                 "mover_is_machine": mover_is_machine,
+                # Grounded specifics so the reaction can be about the POSITION rather
+                # than a restatement of the verdict (which made every comment sound
+                # the same). All free: no extra engine call.
+                "best_san": quality.best_san,
+                "move_kind": self._describe_move(board_before, move, board_after),
+                "phase": analysis.game_phase(board_after),
             }
+            mat = analysis.material_balance(board_after)
+            if mat and mat["leader"] != "even":
+                info["material"] = (f"{mat['leader']} is up {abs(mat['diff'])} "
+                                    f"point{'s' if abs(mat['diff']) != 1 else ''}")
+            elif mat:
+                info["material"] = "level"
             # C: don't flag the machine's OWN blunder/mistake right away — hold it
             # back and only voice it if the opponent actually punishes it (checked
             # after their reply in _resolve_self_critique). Machine's good moves
@@ -641,6 +653,35 @@ class ChessMachine:
         except Exception:  # noqa: BLE001 - commentary must never break a move
             log.exception("Move commentary failed")
             return ""
+
+    @staticmethod
+    def _describe_move(board_before: chess.Board, move: chess.Move,
+                       board_after: chess.Board) -> str:
+        """Plain description of what the move DID (capture, check, castle, ...).
+
+        Purely mechanical, straight off the board -- no engine, no invention. Gives
+        the commentary something concrete to talk about besides the verdict, which
+        is what made every reaction sound identical.
+        """
+        parts = []
+        if board_before.is_castling(move):
+            parts.append("castles")
+        elif board_before.is_capture(move):
+            taken = board_before.piece_at(move.to_square)
+            # en passant has no piece on the destination square
+            name = chess.piece_name(taken.piece_type) if taken else "pawn"
+            parts.append(f"captures a {name}")
+        if move.promotion:
+            parts.append(f"promotes to a {chess.piece_name(move.promotion)}")
+        if board_after.is_checkmate():
+            parts.append("delivers checkmate")
+        elif board_after.is_check():
+            parts.append("gives check")
+        if not parts:
+            piece = board_before.piece_at(move.from_square)
+            if piece is not None:
+                parts.append(f"a quiet {chess.piece_name(piece.piece_type)} move")
+        return ", ".join(parts)
 
     def _resolve_self_critique(self, board_before: chess.Board) -> str:
         """Voice a held-back self-critique iff the move just played (by the

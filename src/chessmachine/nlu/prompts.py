@@ -150,22 +150,38 @@ def build_analysis_messages(question: str, facts: PositionFacts) -> list[dict]:
 
 # Proactive reaction to a move just played (blunder/best/brilliant + tactics).
 COMMENT_SYSTEM = """You are a chess coach reacting OUT LOUD to a move, for a {tier} player. \
-Speak {length}, natural and suitable for text-to-speech. Use ONLY the facts below — never \
-invent a tactic, evaluation, or piece location, and don't restate the move's notation.
+Speak {length}, natural and suitable for text-to-speech.
+
+Ground every claim in the facts below — never invent a tactic, evaluation, or piece \
+location — but say it in your OWN words. Do not quote the assessment wording back; \
+paraphrase it. Vary how you open: react to the idea, the threat, the material, the \
+plan, or what it means for the next few moves. Don't restate the move's notation, \
+don't start consecutive comments the same way, and avoid stock phrases like "holds \
+the position".
+
+Pick the ONE thing most worth saying — usually the consequence for the player, not a \
+label. If a better move is listed, naming it and why is more useful than a verdict.
+
+State the assessment with confidence: it is the engine's verdict, not your guess. \
+Never hedge with "I'm not sure", "it's hard to say", or "potentially" — if the facts \
+say the move is strong, say so plainly.
 {attribution}{teach}
 Facts:
 - move played: {san} by {mover_desc}
 - assessment: {label}
-- tactics found: {motifs}"""
+- tactics found: {motifs}{extra}"""
 
+# Deliberately plain descriptions, not quotable phrases: the model used to parrot
+# these verbatim (every reaction became "the only move that holds the position"),
+# so they now state the fact and leave the wording to the model.
 _LABEL_WORD = {
-    "blunder": "a blunder (loses material or the advantage)",
-    "mistake": "a mistake (clearly inferior)",
-    "best": "the engine's top choice",
-    "great": "the only move that holds the position",
-    "brilliant": "a brilliant, sound sacrifice",
+    "blunder": "a serious error — it throws away material or the advantage",
+    "mistake": "clearly inferior — there was something much better",
+    "best": "what the engine would pick too",
+    "great": "essentially the only move that keeps the position together",
+    "brilliant": "a sacrifice that genuinely works",
     "normal": "a reasonable move",
-    "forced": "forced",
+    "forced": "the only legal option",
 }
 _TIER_LENGTH = {"easy": "one or two short sentences", "medium": "one short sentence",
                 "hard": "one terse sentence, expert tone"}
@@ -183,10 +199,25 @@ def build_move_comment_messages(info: dict) -> list[dict]:
         attribution = ("The move was YOURS — you are the robot; react in the first person "
                        '("I", "my"), not as if the human made it. ')
         if info.get("punished"):
-            attribution += "The opponent just punished it, so acknowledge that. "
+            attribution += ("The opponent just punished it, so own it plainly and say what "
+                            "it cost you — don't be defensive or repeat yourself. ")
     else:
         mover_desc = "the human opponent"
         attribution = 'The move was the human\'s — address them as "you". '
+    # Optional grounded detail. These are what let the model say something specific
+    # instead of falling back on the assessment wording every time; each is omitted
+    # when unknown so the model can never talk about a fact it wasn't given.
+    extra = ""
+    if info.get("best_san"):
+        extra += f"\n- the engine would have played instead: {info['best_san']}"
+    if info.get("cp_loss"):
+        extra += f"\n- it costs about {info['cp_loss'] / 100:.1f} pawns of evaluation"
+    if info.get("move_kind"):
+        extra += f"\n- this move: {info['move_kind']}"
+    if info.get("material"):
+        extra += f"\n- material now: {info['material']}"
+    if info.get("phase"):
+        extra += f"\n- phase: {info['phase']}"
     system = COMMENT_SYSTEM.format(
         tier=tier,
         length=_TIER_LENGTH.get(tier, _TIER_LENGTH["medium"]),
@@ -194,6 +225,7 @@ def build_move_comment_messages(info: dict) -> list[dict]:
         teach=_TIER_TEACH.get(tier, ""),
         san=info.get("san", "the move"),
         mover_desc=mover_desc,
+        extra=extra,
         label=_LABEL_WORD.get(info.get("label", "normal"), "a move"),
         motifs="; ".join(motifs) if motifs else "none",
     )
