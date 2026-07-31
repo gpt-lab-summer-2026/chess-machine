@@ -259,6 +259,11 @@ class MoveQuality:
     cp_loss: int | None = None   # centipawns lost vs the engine's best move
     is_sacrifice: bool = False
     only_good_move: bool = False
+    best_san: str | None = None  # the move the engine preferred instead (SAN, in the
+                                 # position BEFORE the move). Free -- the multi-PV search
+                                 # already found it -- and it's what turns commentary from
+                                 # "that was a mistake" into "Nf3 would have held the pin".
+                                 # None when the played move WAS the engine's choice.
 
     def noteworthy(self) -> bool:
         return self.label in {"blunder", "mistake", "best", "great", "brilliant"}

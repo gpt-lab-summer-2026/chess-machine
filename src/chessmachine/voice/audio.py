@@ -59,6 +59,16 @@ def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
     speech to start, then ends after `silence_ms` of trailing silence. Returns
     float32 in [-1, 1] — empty if too little actual speech was heard.
 
+    End-of-utterance is a TOLERANT window, not a consecutive run. webrtcvad
+    mislabels a real percentage of room noise as speech (MEASURED on this mic:
+    38/200 frames of an empty room at aggressiveness 2, 9/200 at 3), and the old
+    rule -- `silence_ms` of *consecutive* silence, counter reset to zero by any
+    single speech frame -- could then never fire: one blip every couple of seconds
+    is enough to hold it open until the max_utterance_s cap, so Whisper got the
+    whole 7 s window every time instead of the ~2 s that was spoken. Now the
+    utterance ends when the trailing `silence_ms` window is *mostly* quiet
+    (`end_tolerance`), which a scattered false positive can't prevent.
+
     This is the ONE end-of-utterance state machine, shared by every mic backend
     (local sounddevice, network stream): pure and I/O-free, so it is unit-tested
     with a fake VAD and each backend only has to supply frames. Any per-window
@@ -70,9 +80,12 @@ def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
 
     frame_ms = vad_cfg.frame_ms
     silence_frames = max(1, int(vad_cfg.silence_ms / frame_ms))
+    # How many stray "speech" frames the trailing window may contain and still
+    # count as silence. 0.0 restores the old strict consecutive-run behaviour.
+    allowed_speech = int(silence_frames * max(0.0, vad_cfg.end_tolerance))
+    recent: collections.deque = collections.deque(maxlen=silence_frames)
     collected: list[np.ndarray] = []
     triggered = False
-    num_silent = 0
     speech_frames = 0
     saw_signal = False
     # Pre-roll: webrtcvad needs a frame or two to latch onto speech onset, so the
@@ -100,10 +113,9 @@ def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
             collected.append(chunk)
             if is_speech:
                 speech_frames += 1
-                num_silent = 0
-            else:
-                num_silent += 1
-            if num_silent >= silence_frames:
+            recent.append(is_speech)
+            # Full trailing window, and it's mostly quiet -> the utterance is over.
+            if len(recent) == silence_frames and sum(recent) <= allowed_speech:
                 break
 
     # A capture path that yields DIGITAL SILENCE (every sample exactly zero) is a

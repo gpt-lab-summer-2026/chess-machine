@@ -34,9 +34,15 @@ audio:
   listen_beep: true         # short earcon the instant the mic opens = "speak now"
   vad:
     enabled: true
-    aggressiveness: 2       # 0..3
+    aggressiveness: 3       # 0..3, higher = rejects more non-speech. MEASURED on this mic over
+                            # 6 s of empty room: agg 2 mislabelled 38/200 frames as speech,
+                            # agg 3 only 9/200. Those blips are what held the mic open.
     silence_ms: 1500        # trailing silence that ends an utterance. 800 cut people
                             # off mid-phrase ("knight to... f3"); 1500 tolerates a pause.
+    end_tolerance: 0.15     # stray "speech" frames tolerated inside that trailing window.
+                            # Requiring 1500 ms of CONSECUTIVE silence never fired in a real
+                            # room, so every command ran to max_utterance_s (7.4 s of audio
+                            # into whisper). 0.0 = old strict behaviour.
     min_speech_ms: 250      # ignore blips shorter than this (avoids phantom moves)
     max_utterance_s: 7.0    # HARD cap on the whole listen window: the mic cuts off here even
                             # if you keep talking, so each turn is bounded. Speak promptly after

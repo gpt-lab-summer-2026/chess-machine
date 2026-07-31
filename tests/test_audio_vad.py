@@ -208,6 +208,38 @@ def test_quiet_but_nonzero_audio_is_still_accepted():
     assert out.shape[0] > 0
 
 
+def test_scattered_false_positives_still_end_the_utterance():
+    """THE 7.4-second bug. webrtcvad mislabels some room noise as speech (measured:
+    38/200 frames of an empty room at aggressiveness 2). The old rule needed
+    silence_ms of CONSECUTIVE silence and reset on any single speech frame, so one
+    blip per second held the mic open until the max_utterance_s cap and Whisper got
+    the whole window. A mostly-quiet trailing window must end it."""
+    # 3 speech frames, then a tail with a blip every 3rd frame: silence_ms==3 frames
+    # is NEVER satisfied consecutively, yet the window is plainly not speech.
+    tail = [False, False, True] * 19            # 57 frames -> scripts all 60
+    vad = ScriptedVad([True] * 3 + tail)
+    out = collect_utterance(_frames(60), vad, _cfg(end_tolerance=0.34), SR)
+    assert 0 < out.shape[0] < 10 * 480          # ended promptly, not at the cap
+
+
+def test_strict_tolerance_restores_the_old_consecutive_rule():
+    """end_tolerance=0.0 is the documented escape hatch back to the old behaviour --
+    and demonstrates the bug: with blips it never ends, consuming the whole window."""
+    tail = [False, False, True] * 19
+    vad = ScriptedVad([True] * 3 + tail)
+    out = collect_utterance(_frames(60), vad, _cfg(end_tolerance=0.0), SR)
+    assert out.shape[0] == 60 * 480             # never ends: consumes every frame
+
+
+def test_tolerance_does_not_end_the_utterance_while_speech_continues():
+    """The tolerant window must not cut someone off mid-sentence: continuous speech
+    fills the window with True and can never look like silence."""
+    vad = ScriptedVad([True] * 40 + [False] * 3)
+    out = collect_utterance(_frames(60), vad, _cfg(end_tolerance=0.34), SR)
+    # all 40 speech frames kept, then it stops within a frame or two of the silence
+    assert 40 * 480 <= out.shape[0] <= 43 * 480
+
+
 def test_blip_is_rejected_as_too_little_speech():
     # A single 30 ms speech frame is below min_speech_ms=60 -> nothing returned.
     vad = ScriptedVad([True] + [False] * 3)

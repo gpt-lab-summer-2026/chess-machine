@@ -20,8 +20,18 @@ import yaml
 @dataclass
 class VadConfig:
     enabled: bool = True
-    aggressiveness: int = 1          # webrtcvad 0..3 (3 = most aggressive)
+    aggressiveness: int = 3          # webrtcvad 0..3; 3 = most aggressive at REJECTING
+                                     # non-speech. MEASURED on this mic over 6 s of an empty
+                                     # room: agg 2 called 38/200 frames "speech", agg 3 only
+                                     # 9/200. Those false positives are what kept resetting
+                                     # the end-of-utterance timer, so 3 is the right default.
     silence_ms: int = 800            # trailing silence that ends an utterance
+    end_tolerance: float = 0.15      # fraction of the trailing silence window allowed to be
+                                     # (mis)labelled speech and still end the utterance. The old
+                                     # rule needed silence_ms of CONSECUTIVE silence, so a single
+                                     # noise blip reset it and the mic stayed open to the cap --
+                                     # Whisper then got the whole 7 s window every time.
+                                     # 0.0 = strict consecutive run (the old behaviour).
     min_speech_ms: int = 250         # ignore blips with less actual speech than this
     frame_ms: int = 30               # webrtcvad frame size (10/20/30)
     pre_roll_ms: int = 240           # audio kept from BEFORE the VAD triggered. webrtcvad
