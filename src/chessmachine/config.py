@@ -38,7 +38,17 @@ class VadConfig:
 class AudioConfig:
     input_device: str | None = None      # None = system default
     output_device: str | None = None
-    sample_rate: int = 16000                 # whisper expects 16 kHz mono
+    sample_rate: int = 16000                 # rate handed to WHISPER. Fixed by the model
+                                             # (it is trained at 16 kHz mono) -- don't change it.
+    capture_rate: int = 48000                # rate the MIC is opened at. The AK5370 USB mic runs
+                                             # natively at 44.1/48 kHz and REJECTS 16 kHz outright
+                                             # (PaErrorCode -9997), so asking for 16 kHz meant
+                                             # PipeWire silently resampled for us. Capture at the
+                                             # native rate instead and downsample in-process
+                                             # (voice/audio.resample, anti-aliased), so the
+                                             # conversion is ours to control and measure.
+                                             # webrtcvad only accepts 8/16/32/48 kHz; anything else
+                                             # falls back to sample_rate. 0 = capture at sample_rate.
     channels: int = 1
     push_to_talk: bool = False               # if True, record while a key is held
     listen_beep: bool = True                 # play a short earcon the instant the mic opens, so
@@ -166,6 +176,15 @@ class TtsConfig:
     lead_in_primer: bool = False             # if the amp only wakes on SIGNAL (not on a
                                              # silent-but-active link), fill the lead-in with
                                              # inaudible low-level noise instead of pure silence
+    # The real fix for the clipped first syllable. A silent lead-in CANNOT wake a
+    # signal-detect amplifier -- silence is what put it to sleep -- so the pad passes
+    # unheard and the amp still wakes on the first syllable. Streaming continuously
+    # at an inaudible level means it never sleeps, at zero per-utterance latency.
+    # Once this is confirmed working you can drop lead_in_s back to ~0.15.
+    keep_alive: bool = True                  # hold the BT speaker's amp awake (needs pw-play)
+    keep_alive_level: float = 0.002          # ~-54 dBFS. RAISE if the first syllable is still
+                                             # clipped (the amp isn't noticing it); LOWER if you
+                                             # can hear hiss between utterances. 0 = silence.
 
 
 # --------------------------------------------------------------------------- #

@@ -33,26 +33,32 @@ def _bar(x: float, width: int = 40) -> str:
     return "#" * n + "-" * (width - n)
 
 
+def _capture_rate(cfg) -> int:
+    """The rate the mic is actually opened at (mirrors AudioCapture._capture_rate)."""
+    return cfg.audio.capture_rate or cfg.audio.sample_rate
+
+
 def show_devices(cfg) -> int:
     import sounddevice as sd
     want = cfg.audio.input_device
-    print(f"configured audio.input_device = {want!r}   sample_rate = {cfg.audio.sample_rate}")
+    rate = _capture_rate(cfg)
+    print(f"configured audio.input_device = {want!r}")
+    print(f"  capture_rate = {rate} Hz (mic)  ->  sample_rate = {cfg.audio.sample_rate} Hz (whisper)")
     print(f"PortAudio default (in, out)   = {sd.default.device}")
     print("\ninput devices:")
     for i, d in enumerate(sd.query_devices()):
         if d["max_input_channels"] > 0:
             print(f"  [{i}] ch={d['max_input_channels']:<3} native={d['default_samplerate']:.0f}Hz"
                   f"  {d['name']}")
-    print(f"\ncan the configured device do {cfg.audio.sample_rate} Hz mono int16?")
+    print(f"\ncan the configured device do {rate} Hz mono int16?")
     try:
-        sd.check_input_settings(device=want, samplerate=cfg.audio.sample_rate,
-                                channels=1, dtype="int16")
+        sd.check_input_settings(device=want, samplerate=rate, channels=1, dtype="int16")
         print("  OK")
         return 0
     except Exception as exc:  # noqa: BLE001
         print(f"  FAIL: {exc}")
-        print("  A raw USB device (hw:N,0) often supports only 44.1/48 kHz. Set")
-        print("  audio.input_device: default  so ALSA/PipeWire resamples to 16 kHz.")
+        print("  Set audio.capture_rate to a rate the device supports (one of webrtcvad's")
+        print("  8000/16000/32000/48000), or audio.input_device: default to let PipeWire adapt.")
         return 1
 
 
@@ -60,7 +66,7 @@ def level_meter(cfg, seconds: float) -> int:
     import numpy as np
     import sounddevice as sd
 
-    sr = cfg.audio.sample_rate
+    sr = _capture_rate(cfg)          # meter the RAW hardware, at the rate we open it
     blk = int(sr * 0.1)
     print(f"level meter: {seconds:g}s at {sr} Hz — make some noise (Ctrl-C to stop)")
     peak_all = 0.0
@@ -130,6 +136,7 @@ def main(argv=None) -> int:
     cfg = load_config(args.config)
     print(f"stt.backend = {cfg.stt.backend}   input_device = {cfg.audio.input_device!r}"
           f"   vad aggressiveness = {cfg.audio.vad.aggressiveness}")
+    print(f"capture {_capture_rate(cfg)} Hz -> whisper {cfg.audio.sample_rate} Hz")
 
     if args.devices:
         return show_devices(cfg)
@@ -141,10 +148,10 @@ def main(argv=None) -> int:
         import sounddevice as sd
         try:
             sd.check_input_settings(device=cfg.audio.input_device,
-                                    samplerate=cfg.audio.sample_rate,
+                                    samplerate=_capture_rate(cfg),
                                     channels=1, dtype="int16")
         except Exception as exc:  # noqa: BLE001
-            print(f"\nthe configured input can't do {cfg.audio.sample_rate} Hz mono: {exc}")
+            print(f"\nthe configured input can't do {_capture_rate(cfg)} Hz mono: {exc}")
             print("run --devices for the fix")
             return 1
 

@@ -87,6 +87,11 @@ class ChessMachine:
 
     # -- lifecycle ----------------------------------------------------------- #
     def start(self, home: bool = True) -> None:
+        # FIRST thing, before anything is spoken: wake the speaker's amplifier and
+        # keep it awake. Homing and the SLM warm-up below take seconds, so by the
+        # time we say "Chess machine ready" the amp is long since up and the
+        # leading "Ch" survives.
+        self._start_keep_alive()
         self.choreo.connect()
         if home:
             self.choreo.home()
@@ -145,9 +150,32 @@ class ChessMachine:
             self.close()
 
     def close(self) -> None:
-        for fn in (self._park, self.choreo.close, self.engine.close, self.nlu.close):
+        for fn in (self._stop_keep_alive, self._park, self.choreo.close,
+                   self.engine.close, self.nlu.close):
             with contextlib.suppress(Exception):
                 fn()
+
+    def _start_keep_alive(self) -> None:
+        """Hold the Bluetooth speaker's amp awake for the whole session, so no
+        utterance loses its first syllable. Best-effort: no pw-play (dev boxes) or
+        no BT speaker simply means no keep-alive."""
+        self._keep_alive = None
+        # Nothing to keep awake unless we actually play audio through a speaker:
+        # --dev/stdout TTS and the test fixtures must not spawn a pw-play stream.
+        if not self.cfg.tts.keep_alive or self.cfg.tts.backend != "kokoro":
+            return
+        try:
+            from .voice.audio import SpeakerKeepAlive
+            ka = SpeakerKeepAlive(level=self.cfg.tts.keep_alive_level)
+            if ka.start():
+                self._keep_alive = ka
+        except Exception:  # noqa: BLE001 - never block startup on a comfort stream
+            log.debug("speaker keep-alive failed to start", exc_info=True)
+
+    def _stop_keep_alive(self) -> None:
+        ka, self._keep_alive = getattr(self, "_keep_alive", None), None
+        if ka is not None:
+            ka.stop()
 
     def _park(self) -> None:
         self.choreo.park()

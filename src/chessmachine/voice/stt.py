@@ -13,6 +13,10 @@ from .console import safe_print
 
 log = logging.getLogger(__name__)
 
+# Whisper's fixed input rate: the model is trained on 16 kHz mono, so every capture
+# backend resamples to this before transcription (see voice/audio.resample).
+WHISPER_SR = 16000
+
 
 class STT(ABC):
     @abstractmethod
@@ -59,6 +63,15 @@ class DistilWhisperSTT(STT):
         except Exception:  # noqa: BLE001 - not cached yet; fall through to download
             log.info("%s not in the local cache -- downloading", cfg.model)
             self.model = WhisperModel(cfg.model, **kwargs)
+        # The rate Whisper is fed at. Every capture backend downsamples to this
+        # before returning: the local mic records at audio.capture_rate (48 kHz,
+        # its native rate) and resamples in voice/audio.resample; esp32 and network
+        # do the same from their own rates. Whisper is trained at 16 kHz, so a
+        # different value here would silently change the perceived speaking rate.
+        self.sample_rate = audio_cfg.sample_rate
+        if self.sample_rate != WHISPER_SR:
+            log.warning("audio.sample_rate is %d Hz, but Whisper expects %d Hz -- "
+                        "transcription will be inaccurate.", self.sample_rate, WHISPER_SR)
         # `capture` is any object with record_utterance() -> 16 kHz float32. Default
         # is the local sounddevice mic; the esp32 backend injects a serial capture.
         if capture is None:
@@ -92,7 +105,8 @@ class DistilWhisperSTT(STT):
             if rms > 1e-5 and peak > 1e-5:
                 gain = min(self.cfg.target_rms / rms, 0.97 / peak)   # cap: never clip
                 x = (x * gain).astype("float32")
-        pad = int(16000 * self.cfg.pad_ms / 1000)   # Whisper input is always 16 kHz
+        # Capture has already downsampled to Whisper's rate by the time we get here.
+        pad = int(getattr(self, "sample_rate", WHISPER_SR) * self.cfg.pad_ms / 1000)
         if pad > 0:
             z = np.zeros(pad, dtype="float32")
             x = np.concatenate([z, x, z])

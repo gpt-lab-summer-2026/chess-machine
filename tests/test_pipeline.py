@@ -26,6 +26,7 @@ def make(auto_reply=True, play_as="black"):
     cfg.motion.backend = "mock"
     cfg.motion.speeds.settle_ms = 0
     cfg.motion.magnet.settle_ms = 0
+    cfg.tts.keep_alive = False        # no real speaker here; don't spawn a pw-play stream
     tts = CaptureTTS()
     machine = ChessMachine(
         config=cfg, stt=StdinSTT(), tts=tts,

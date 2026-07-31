@@ -14,12 +14,23 @@ app:
   log_level: INFO
 
 audio:
-  input_device: default     # ALSA/PipeWire plug device -- NOT the raw USB mic.
-                            # The AK5370 USB mic's hw:2,0 only does 44.1/48 kHz and
-                            # REJECTS the 16 kHz whisper needs (PaErrorCode -9997);
-                            # "default" resamples. Don't pin this to "AK5370"/hw:2,0.
+  input_device: Trust       # substring-matched against the PortAudio device name, so it
+                            # survives card renumbering on replug (hw:2,0 today, hw:3,0
+                            # tomorrow). Currently the Trust GXT234 YUNIX USB mic.
+                            # MUST be pinned, NOT "default": the BT speaker (BTL-324)
+                            # publishes its own HSP mic, and PipeWire made THAT the
+                            # default source -- recording from it is both near-silent
+                            # (rms 0.0008 vs 0.015 on the Trust) and forces the speaker
+                            # out of A2DP into 8 kHz narrowband, wrecking playback too.
+                            # Like the old AK5370, this mic does 44.1/48 kHz ONLY and
+                            # REJECTS the 16 kHz whisper needs (PaErrorCode -9997) --
+                            # hence capture_rate below, never sample_rate.
   output_device: null       # unused: playback goes via pw-play (see voice/audio.py)
-  sample_rate: 16000        # whisper wants 16 kHz mono
+  sample_rate: 16000        # what WHISPER is fed. Fixed by the model -- leave at 16000.
+  capture_rate: 48000       # what the MIC is opened at: its native rate. We capture full-rate
+                            # and downsample ourselves (anti-aliased, voice/audio.resample)
+                            # instead of letting PipeWire's resampler do it unseen.
+                            # Must be one of webrtcvad's 8/16/32/48 kHz.
   listen_beep: true         # short earcon the instant the mic opens = "speak now"
   vad:
     enabled: true
@@ -58,11 +69,18 @@ tts:
   model_path: models/kokoro/kokoro-v1.0.onnx
   voices_path: models/kokoro/voices-v1.0.bin
   intra_op_threads: 2       # onnxruntime would otherwise take all 4 cores and spin while idle
-  lead_in_s: 0.5            # silence before each spoken clip so the BT speaker's amp is awake
-                           # before the first syllable ("ess machine ready" -> "chess machine
-                           # ready"). Tune by ear: python scripts/tts_leadin_test.py
-  lead_in_primer: false    # true = fill the lead-in with inaudible low-level noise instead of
-                           # silence, for amps that only wake on SIGNAL (not on a silent link)
+  # Clipped first syllable ("chess machine ready" -> "ess machine ready"): the BTL-324
+  # powers its amplifier down between utterances. keep_alive is the actual fix --
+  # a silent lead_in can't wake a signal-detect amp, because silence is what put it
+  # to sleep. Tune: python scripts/tts_leadin_test.py --keepalive
+  keep_alive: true          # stream inaudible noise continuously so the amp never sleeps
+  keep_alive_level: 0.002   # ~-54 dBFS. RAISE (0.004, 0.01) if the first syllable is STILL
+                            # clipped; LOWER if you can hear hiss between utterances.
+  lead_in_s: 0.5            # silence before each clip. Belt-and-suspenders now that keep_alive
+                           # holds the amp up -- once that's confirmed working, drop this to
+                           # 0.15 to make every reply snappier.
+  lead_in_primer: false    # true = fill the lead-in with inaudible noise instead of silence
+                           # (only useful if you turn keep_alive off)
 
 slm:
   backend: llama_cpp        # llama_cpp | rule_based (dev/fallback, no model)

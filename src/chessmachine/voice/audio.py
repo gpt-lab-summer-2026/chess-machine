@@ -6,6 +6,7 @@ for whisper. Heavy deps are imported lazily so the module loads without them.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 from collections.abc import Iterable
@@ -124,15 +125,84 @@ def collect_utterance(frames: Iterable[Any], vad: Any, vad_cfg: VadConfig,
     return np.concatenate(collected).astype("float32") / 32768.0
 
 
+def _lowpass(x: np.ndarray, cutoff_hz: float, rate: int, taps: int = 161) -> np.ndarray:
+    """Windowed-sinc FIR low-pass, applied before any downsample.
+
+    Without this, decimating 48 kHz -> 16 kHz folds everything above 8 kHz back
+    into the speech band as aliasing distortion -- exactly the kind of degradation
+    that makes Whisper hallucinate.
+
+    161 taps, not fewer: the transition band scales as ~3.3/taps, and at 101 taps
+    the roll-off started biting at 7 kHz (-2.9 dB) and reached -14 dB by 7.5 kHz --
+    audible loss of exactly the /t/ /d/ /s/ burst energy that distinguishes
+    "d2 to d4" from "d2". At 161 taps the response is flat (-0.0 dB) through 7 kHz
+    and still -47 dB at the 8 kHz fold point, i.e. strictly better in BOTH bands.
+    Measured on this Pi: 11 ms for a worst-case 7 s clip, against a ~6 s decode.
+    """
+    import numpy as np
+
+    if x.size < taps:                       # too short to filter meaningfully
+        return x
+    n = np.arange(taps) - (taps - 1) / 2
+    h = (np.sinc(2.0 * (cutoff_hz / rate) * n) * np.hamming(taps)).astype("float32")
+    h /= h.sum()                            # unity DC gain
+    return np.convolve(x, h, mode="same").astype("float32")
+
+
+def resample(x: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
+    """Resample mono float32 audio, anti-aliasing when downsampling.
+
+    The USB mic runs at its native rate (44.1/48 kHz) and Whisper needs 16 kHz, so
+    the conversion happens HERE rather than being left to PipeWire's resampler --
+    we keep the full-rate capture and control the filtering ourselves. Band-limit
+    first, then sample onto the target grid (an exact decimation when the ratio is
+    an integer, e.g. 48k -> 16k).
+    """
+    import numpy as np
+
+    x = np.asarray(x, dtype="float32").reshape(-1)
+    if src_rate == dst_rate or x.size == 0:
+        return x
+    if dst_rate < src_rate:
+        # 0.47 * dst_rate (7520 Hz for 16 kHz out) sits as close to the new Nyquist
+        # as the filter's transition band allows: flat through the speech band,
+        # -47 dB by 8 kHz where aliasing would fold in. See _lowpass.
+        x = _lowpass(x, cutoff_hz=0.47 * dst_rate, rate=src_rate)
+    n_out = int(round(x.shape[0] * dst_rate / src_rate))
+    if n_out <= 0:
+        return np.zeros(0, dtype="float32")
+    src_idx = np.arange(n_out, dtype="float64") * (src_rate / dst_rate)
+    return np.interp(src_idx, np.arange(x.shape[0]), x).astype("float32")
+
+
 class AudioCapture:
     def __init__(self, cfg: AudioConfig):
         self.cfg = cfg
 
     def record_utterance(self) -> np.ndarray:
-        """Record one utterance; return a float32 numpy array at cfg.sample_rate."""
+        """Record one utterance; return float32 at cfg.sample_rate (16 kHz).
+
+        The mic itself is opened at cfg.capture_rate -- its NATIVE rate -- and the
+        result is downsampled here (see `resample`).
+        """
         if self.cfg.vad.enabled:
             return self._record_vad()
         return self._record_fixed(self.cfg.vad.max_utterance_s)
+
+    def _capture_rate(self) -> int:
+        """Rate to open the mic at: cfg.capture_rate, or the Whisper rate if unset.
+
+        webrtcvad only accepts 8/16/32/48 kHz, so a capture rate it can't handle
+        (e.g. the card's 44.1 kHz) would raise deep inside the VAD on every frame.
+        Fall back to the Whisper rate in that case rather than failing to listen.
+        """
+        rate = self.cfg.capture_rate or self.cfg.sample_rate
+        if self.cfg.vad.enabled and rate not in (8000, 16000, 32000, 48000):
+            log.warning("audio.capture_rate %d Hz is not one of webrtcvad's "
+                        "8/16/32/48 kHz -- capturing at %d Hz instead.",
+                        rate, self.cfg.sample_rate)
+            return self.cfg.sample_rate
+        return rate
 
     # -- VAD-gated capture --------------------------------------------------- #
     def _record_vad(self) -> np.ndarray:
@@ -141,15 +211,16 @@ class AudioCapture:
         import sounddevice as sd
         import webrtcvad
 
-        sr = self.cfg.sample_rate
+        sr = self._capture_rate()                            # native mic rate
         frame_len = int(sr * self.cfg.vad.frame_ms / 1000)   # samples per frame
         vad = webrtcvad.Vad(self.cfg.vad.aggressiveness)
 
         with sd.RawInputStream(samplerate=sr, channels=1, dtype="int16",
                                blocksize=frame_len, device=self.cfg.input_device) as stream:
-            log.debug("Listening (VAD)...")
+            log.debug("Listening (VAD) at %d Hz...", sr)
             frames = self._iter_frames(stream, frame_len)
-            return collect_utterance(frames, vad, self.cfg.vad, sr)
+            audio = collect_utterance(frames, vad, self.cfg.vad, sr)
+        return resample(audio, sr, self.cfg.sample_rate)     # -> Whisper's 16 kHz
 
     def _iter_frames(self, stream: Any, frame_len: int):
         """Yield int16 mono frames from an open input stream, capped at
@@ -168,12 +239,109 @@ class AudioCapture:
     def _record_fixed(self, seconds: float) -> np.ndarray:
         import sounddevice as sd
 
-        sr = self.cfg.sample_rate
-        log.debug("Recording %.1fs...", seconds)
+        sr = self._capture_rate()
+        log.debug("Recording %.1fs at %d Hz...", seconds, sr)
         audio = sd.rec(int(seconds * sr), samplerate=sr, channels=1,
                        dtype="float32", device=self.cfg.input_device)
         sd.wait()
-        return audio.reshape(-1)
+        return resample(audio.reshape(-1), sr, self.cfg.sample_rate)
+
+
+class SpeakerKeepAlive:
+    """Hold a Bluetooth speaker's amplifier awake with a continuous inaudible stream.
+
+    THE reason a silent lead-in did not fix the clipped first syllable: cheap BT
+    speakers power their amplifier down after a few seconds of *silence* and take
+    ~350 ms to wake. Padding the clip with silence feeds the amp exactly what puts
+    it to sleep, so it sleeps straight through the pad and still wakes on the first
+    syllable ("Chess machine ready" -> "ess machine ready", "Your move" -> "r move").
+    Disabling PipeWire's node suspend didn't help either -- that fixes the *link*,
+    not the speaker's own amp.
+
+    Keeping one very quiet noise stream open means the amp never sleeps at all, so
+    speech starts instantly and needs no lead-in latency. PipeWire mixes this stream
+    with the speech stream, so nothing else has to change.
+
+    Level is a trade-off only the ear can settle: too quiet and the amp still naps,
+    too loud and you hear hiss. Tune `tts.keep_alive_level` with
+    scripts/tts_leadin_test.py --keepalive.
+    """
+
+    _CHUNK_S = 0.1
+
+    def __init__(self, sample_rate: int = 48000, level: float = 0.002):
+        self.sample_rate = sample_rate
+        self.level = level
+        self._proc: Any = None
+        self._thread: Any = None
+        self._stop: Any = None
+
+    def start(self) -> bool:
+        """Begin streaming. Returns False (and does nothing) if pw-play is absent."""
+        import threading
+
+        if shutil.which("pw-play") is None:
+            log.debug("pw-play not installed -- speaker keep-alive disabled")
+            return False
+        if self._thread is not None:
+            return True
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="spk-keepalive", daemon=True)
+        self._thread.start()
+        log.info("Speaker keep-alive on (level %.4f) -- holding the BT amp awake so "
+                 "the first syllable isn't clipped.", self.level)
+        return True
+
+    def stop(self) -> None:
+        if self._stop is not None:
+            self._stop.set()
+        proc, self._proc = self._proc, None
+        if proc is not None:
+            with contextlib.suppress(Exception):
+                proc.stdin.close()
+            with contextlib.suppress(Exception):
+                proc.terminate()
+        self._thread = None
+
+    def _buffer(self) -> bytes:
+        """~1 s of very low-level noise, looped. Noise (not a tone) because amp
+        detectors are broadband, and it can't beat against anything."""
+        import numpy as np
+
+        rng = np.random.default_rng(0)
+        amp = max(1, int(self.level * 32767))
+        n = int(self.sample_rate)
+        return rng.integers(-amp, amp + 1, size=n).astype("<i2").tobytes()
+
+    def _run(self) -> None:
+        import subprocess
+
+        chunk_bytes = int(self.sample_rate * self._CHUNK_S) * 2
+        payload = self._buffer()
+        while self._stop is not None and not self._stop.is_set():
+            try:
+                self._proc = subprocess.Popen(
+                    ["pw-play", "--raw", f"--rate={self.sample_rate}",
+                     "--channels=1", "--format=s16", "-"],
+                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                pos = 0
+                while not self._stop.is_set():
+                    if pos + chunk_bytes > len(payload):
+                        pos = 0
+                    self._proc.stdin.write(payload[pos:pos + chunk_bytes])
+                    self._proc.stdin.flush()
+                    pos += chunk_bytes
+                    if self._proc.poll() is not None:
+                        break               # player died (sink vanished) -> respawn
+            except Exception:  # noqa: BLE001 - a comfort stream must never crash the app
+                log.debug("speaker keep-alive stream dropped; retrying", exc_info=True)
+            finally:
+                with contextlib.suppress(Exception):
+                    self._proc.stdin.close()
+            if self._stop is not None and not self._stop.wait(1.0):
+                continue                    # BT dropped out: reconnect after a beat
 
 
 def make_beep(sample_rate: int = 24000, freq: float = 880.0, ms: int = 160,

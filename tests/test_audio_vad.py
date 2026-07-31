@@ -7,10 +7,87 @@ webrtcvad, so no microphone, model, or hardware is needed.
 """
 import numpy as np
 
-from chessmachine.config import VadConfig
-from chessmachine.voice.audio import _lead_in, collect_utterance, make_beep
+from chessmachine.config import AudioConfig, VadConfig
+from chessmachine.voice.audio import (
+    AudioCapture,
+    _lead_in,
+    collect_utterance,
+    make_beep,
+    resample,
+)
 
 SR = 16000
+
+
+# -- 48 kHz capture -> 16 kHz for Whisper ------------------------------------ #
+def _tone(freq, seconds, rate):
+    t = np.arange(int(rate * seconds), dtype="float32") / rate
+    return np.sin(2 * np.pi * freq * t).astype("float32")
+
+
+def test_resample_48k_to_16k_length_and_dtype():
+    out = resample(_tone(440, 1.0, 48000), 48000, 16000)
+    assert out.dtype == np.float32
+    assert out.shape[0] == 16000                 # exactly 1 s at the new rate
+
+
+def test_resample_preserves_a_speech_band_tone():
+    """A 440 Hz tone must survive 48k -> 16k intact (it's well inside the band)."""
+    out = resample(_tone(440, 0.5, 48000), 48000, 16000)
+    mid = out[800:-800]                          # skip FIR edge transients
+    assert 0.6 < float(np.max(np.abs(mid))) < 1.05
+    # dominant frequency is still ~440 Hz
+    spec = np.abs(np.fft.rfft(mid))
+    peak_hz = float(np.fft.rfftfreq(mid.size, 1 / 16000)[int(np.argmax(spec))])
+    assert abs(peak_hz - 440) < 25
+
+
+def test_resample_rejects_out_of_band_content_instead_of_aliasing_it():
+    """THE reason this isn't plain linear interpolation: a 15 kHz tone is above the
+    16 kHz Nyquist and must be filtered out, not folded back into the speech band
+    as a phantom ~1 kHz tone that Whisper would try to transcribe."""
+    aliased = resample(_tone(15000, 0.5, 48000), 48000, 16000)
+    clean = resample(_tone(440, 0.5, 48000), 48000, 16000)
+    mid_a, mid_c = aliased[800:-800], clean[800:-800]
+    assert float(np.sqrt(np.mean(mid_a**2))) < 0.05 * float(np.sqrt(np.mean(mid_c**2)))
+
+
+def test_resample_is_a_no_op_at_the_same_rate_or_when_empty():
+    x = _tone(440, 0.1, 16000)
+    assert resample(x, 16000, 16000) is x or np.array_equal(resample(x, 16000, 16000), x)
+    assert resample(np.zeros(0, dtype="float32"), 48000, 16000).shape[0] == 0
+
+
+def test_capture_rate_falls_back_when_webrtcvad_cannot_handle_it():
+    """webrtcvad only accepts 8/16/32/48 kHz, so a 44.1 kHz capture rate would
+    raise on every frame -- fall back to the Whisper rate rather than going deaf."""
+    cap = AudioCapture(AudioConfig(capture_rate=44100, sample_rate=16000))
+    assert cap._capture_rate() == 16000
+    assert AudioCapture(AudioConfig(capture_rate=48000))._capture_rate() == 48000
+    # 0 means "just use the whisper rate"
+    assert AudioCapture(AudioConfig(capture_rate=0, sample_rate=16000))._capture_rate() == 16000
+
+
+def test_keep_alive_buffer_is_inaudibly_quiet_but_not_silent():
+    """The whole point: a signal-detect amp needs actual SIGNAL to stay awake
+    (silence is what puts it to sleep), yet it must not be audible as hiss."""
+    from chessmachine.voice.audio import SpeakerKeepAlive
+
+    buf = np.frombuffer(SpeakerKeepAlive(sample_rate=8000, level=0.002)._buffer(),
+                        dtype="<i2")
+    assert buf.size == 8000                       # ~1 s at that rate
+    assert buf.any()                              # NOT digital silence
+    assert int(np.abs(buf).max()) <= int(0.002 * 32767) + 1   # ~-54 dBFS, inaudible
+
+
+def test_keep_alive_is_a_noop_without_pw_play(monkeypatch):
+    """Dev boxes have no pw-play; start() must decline rather than raise."""
+    from chessmachine.voice import audio as audio_mod
+
+    monkeypatch.setattr(audio_mod.shutil, "which", lambda name: None)
+    ka = audio_mod.SpeakerKeepAlive()
+    assert ka.start() is False
+    ka.stop()                                      # must be safe even if never started
 
 
 def test_make_beep_is_bounded_faded_and_the_right_length():
