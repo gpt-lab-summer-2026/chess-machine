@@ -359,6 +359,9 @@ class MagnetConfig:
     pick_dip_steps: int = 38          # extra winch half-steps to dip PAST the calibrated pick depth on a
                                       # PICK, so a slightly-too-high predetermined height still makes contact
                                       # (stepmap backend only; 0 disables). Drops release at the height, no dip.
+    release_above_steps: int = 40     # DROP a piece from this many winch steps ABOVE the mapped touch depth,
+                                      # so the winch sets it down instead of pressing it into the board
+                                      # (stepmap backend only; 0 = release at the mapped depth)
 
 
 @dataclass
@@ -391,6 +394,9 @@ class AppConfig:
     rehome_every_n_moves: int = 0     # re-home every N finished machine moves (0 = off). With the base
                                       # limit switch, drift is bounded, so periodic homing beats per-move.
     self_critique_only_if_punished: bool = True  # voice own blunder only if opponent punishes it
+    two_player: bool = False          # human-vs-human: the machine actuates + comments but makes no moves
+                                      # (prompts each player in turn instead of playing a side)
+    comment_openings: bool = True     # name recognized openings once or twice as the game develops
     log_level: str = "INFO"
 
 

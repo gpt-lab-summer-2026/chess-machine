@@ -40,6 +40,7 @@ class StepMapMotion(MotionController):
         self.map_path = cfg.stepmap.map_path
         self.pick_below_mm = cfg.stepmap.pick_below_mm
         self.match_tol_mm = cfg.stepmap.match_tol_mm
+        self.release_above = int(cfg.magnet.release_above_steps)  # drop this many steps above the touch depth
         self._inner = SerialMotion(cfg.serial)   # the real transport (GOTO / MOVE / HOME / MAG)
         self._index: list[tuple[float, float, str, dict]] = []   # (x, z, name, entry)
         self._on_map = False        # was the last move_xz a mapped square (vs geometry fallback)?
@@ -127,6 +128,16 @@ class StepMapMotion(MotionController):
                 self._inner.goto_steps(winch=self._cur_winch)
         else:                                            # raise to travel (step 0)
             self._inner.goto_steps(winch=0)
+
+    def set_pulley_for_drop(self, height_mm: float, feed: int | None = None) -> None:
+        # Release a piece `release_above` steps ABOVE the mapped touch depth so the
+        # winch sets it down rather than pressing it into the board. Only for a lower
+        # onto a mapped square; raises and off-board drops fall through to set_pulley.
+        if (self._on_map and self._cur_winch is not None
+                and height_mm < self.pick_below_mm and self.release_above):
+            self._inner.goto_steps(winch=self._cur_winch - self.release_above)
+        else:
+            self.set_pulley(height_mm, feed)
 
     def pick_dip(self, steps: int) -> None:
         # Dip the winch `steps` deeper than the mapped square's calibrated pick depth

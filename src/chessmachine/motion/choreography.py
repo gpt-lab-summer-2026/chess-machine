@@ -89,10 +89,10 @@ class Choreographer:
     def _place(self, point: Point) -> None:
         self.ctl.move_xz(point.x, point.z, self.speeds.travel_feed)
         self._sleep(self.speeds.settle_ms)
-        self.ctl.set_pulley(self.geo.cfg.pick_height_mm, self.speeds.lift_feed)   # lower to the drop height
+        self.ctl.set_pulley_for_drop(self.geo.cfg.pick_height_mm, self.speeds.lift_feed)  # lower to just above the board
         self._sleep(self.magnet_cfg.settle_ms)
         self.ctl.magnet(False)                         # release — the ONLY time the magnet turns off mid-move
-        self._sleep(self.magnet_cfg.settle_ms)         # (no dip on a drop — release at the calibrated height)
+        self._sleep(self.magnet_cfg.settle_ms)         # (released above the mapped depth, so it isn't pressed in)
         self.ctl.set_pulley(self.geo.cfg.travel_height_mm, self.speeds.lift_feed)
         self._sleep(self.speeds.settle_ms)
 

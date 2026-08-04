@@ -51,6 +51,12 @@ class MotionController(ABC):
         when the calibrated pick height is slightly high, then hold at that depth.
         Default no-op; backends with absolute winch control (stepmap) override it."""
 
+    def set_pulley_for_drop(self, height_mm: float, feed: int | None = None) -> None:
+        """Lower for a DROP (release). Default = same as set_pulley; backends with an
+        absolute winch (stepmap) stop short of the mapped depth so the piece is set
+        down from just above the board rather than pressed into it."""
+        self.set_pulley(height_mm, feed)
+
     def __enter__(self):
         self.connect()
         return self

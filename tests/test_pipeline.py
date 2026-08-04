@@ -19,10 +19,11 @@ class CaptureTTS(TTS):
         self.lines.append(text)
 
 
-def make(auto_reply=True, play_as="black"):
+def make(auto_reply=True, play_as="black", two_player=False):
     cfg = Config()
     cfg.app.auto_reply = auto_reply
     cfg.app.play_as = play_as
+    cfg.app.two_player = two_player
     cfg.motion.backend = "mock"
     cfg.motion.speeds.settle_ms = 0
     cfg.motion.magnet.settle_ms = 0
@@ -43,6 +44,34 @@ def test_opponent_move_actuated_with_autoreply():
     m.handle("e4")
     assert m.game.history[0][1] == "e4"
     assert len(m.game.history) == 2                       # engine auto-replied
+
+
+def test_two_player_both_moves_human_no_engine_reply():
+    m, tts = make(two_player=True)
+    m.handle("e4")                                        # White (player 1)
+    assert len(m.game.history) == 1 and m.game.history[0][1] == "e4"   # NO engine reply
+    assert m._turn_prompt() == "Player two, your move."   # Black is up next
+    m.handle("c5")                                        # Black (player 2)
+    assert len(m.game.history) == 2 and m.game.history[1][1] == "c5"
+    assert m._turn_prompt() == "Player one, your move."
+    # the machine still comments — it named the opening
+    assert any("sicilian" in line.lower() for line in tts.lines)
+
+
+def test_two_player_refuses_to_make_a_move():
+    m, tts = make(two_player=True)
+    m.handle("your move")                                 # ask the machine to play
+    assert m.game.history == []                           # it made none
+    assert any("two-player" in line.lower() for line in tts.lines)
+
+
+def test_opening_named_once_then_on_the_deeper_line():
+    m, tts = make(two_player=True)
+    for mv in ["e4", "c5", "Nf3", "d6", "d4", "cxd4", "Nxd4", "Nf6", "Nc3", "a6"]:
+        m.handle(mv)
+    joined = " ".join(tts.lines).lower()
+    assert "sicilian defense" in joined                   # named when it entered the Sicilian
+    assert "najdorf" in joined                            # named again on the deeper line
     assert any(op[0] == "move" for op in m.choreo.ctl.ops)  # gantry moved
     assert m.choreo.ctl.homed                              # start() homed it
 

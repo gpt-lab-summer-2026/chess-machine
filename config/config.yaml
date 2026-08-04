@@ -10,7 +10,9 @@ app:
                              # crane. Set true to speak while the crane runs (faster, less legible).
   match_clock: true         # track the human's thinking time only (ask "status"/"score")
   rehome_after_move: false   # the base limit switch bounds drift, so don't home every turn
-  rehome_every_n_moves: 10   # instead, re-home every 10 finished machine moves (~20-30 s each)
+  rehome_every_n_moves: 3    # instead, re-home every 3 finished machine moves
+  two_player: false          # human vs human: the machine moves the pieces + comments, makes no moves
+  comment_openings: true     # name the opening once or twice as it's recognized
   log_level: INFO
 
 audio:
@@ -114,7 +116,7 @@ engine:
 motion:
   backend: stepmap          # stepmap (ground-truth step map) | serial (geometry) | mock | relay
   stepmap:
-    map_path: jeemap.json  # newest calibration (29 anchors); config/bestmap.json is the older 23-anchor one
+    map_path: joomap.json  # newest calibration (29 anchors); config/bestmap.json is the older 23-anchor one
     pick_below_mm: 30.0     # set_pulley height below this -> lower to the square's calibrated depth
     match_tol_mm: 1.0       # a move must land within this of a mapped square to use the map
   serial:
@@ -173,3 +175,5 @@ motion:
     hover_ms: 500           # dwell over a piece (magnet already on) before dipping to pick it up
     pick_dip_steps: 38      # extra winch steps to dip PAST the calibrated pick depth for sure contact
                             # on a PICK (the predetermined height isn't always exact). Drops don't dip.
+    release_above_steps: 40 # DROP a piece 40 winch steps ABOVE the mapped depth, so the winch sets it
+                            # down rather than pressing it into the board

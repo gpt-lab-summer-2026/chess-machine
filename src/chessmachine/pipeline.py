@@ -18,6 +18,7 @@ import chess
 
 from .chess_engine import ChessEngine, GameState, analysis
 from .chess_engine.game import speak_san
+from .chess_engine.openings import identify_opening
 from .clock import MatchClock
 from .config import Config, DifficultyPreset, preset_from_elo
 from .motion import Choreographer
@@ -72,6 +73,11 @@ class ChessMachine:
         self.machine_color = chess.WHITE if config.app.play_as.lower() == "white" else chess.BLACK
         self.game = GameState(machine_color=self.machine_color)
         self.difficulty = config.engine.default_difficulty
+        # Two-player (human vs human): the machine actuates + comments but never makes a
+        # move, and prompts each player in turn instead of playing a side.
+        self.two_player = config.app.two_player
+        self._opening_said = 0             # opening comments made this game (capped at 2)
+        self._opening_depth = 0            # deepest opening line recognized so far (plies)
         self._last_spoken = ""
         self._pending: str | None = None   # a destructive action awaiting confirmation
         self._moves_since_home = 0         # finished machine moves since the last re-home (cadence)
@@ -100,10 +106,14 @@ class ChessMachine:
         # the live context makes the warm-up's cached prefix match the real one.
         log.info("Warming up the language model...")
         self.nlu.warmup(self._context())
-        self._say(f"Chess machine ready. I'm playing "
-                  f"{GameState.color_name(self.machine_color)} at {self.difficulty} difficulty.")
-        if self.cfg.app.auto_reply and self.game.is_machine_turn() and not self.game.is_game_over():
-            self._do_engine_move("I'll open with")
+        if self.two_player:
+            self._say("Chess machine ready. Two-player mode — tell me each player's move "
+                      "and I'll move the pieces and comment on the game.")
+        else:
+            self._say(f"Chess machine ready. I'm playing "
+                      f"{GameState.color_name(self.machine_color)} at {self.difficulty} difficulty.")
+            if self.cfg.app.auto_reply and self.game.is_machine_turn() and not self.game.is_game_over():
+                self._do_engine_move("I'll open with")
 
     def run(self) -> None:
         empty_windows = 0
@@ -227,14 +237,23 @@ class ChessMachine:
         when a yes/no confirmation is pending, the game is over, or it's the
         machine's turn; and only once per turn, so back-to-back questions during
         the same turn don't re-trigger it."""
-        if (self._pending is not None or self.game.is_game_over()
-                or self.game.is_machine_turn()):
+        if self._pending is not None or self.game.is_game_over():
             return
+        if not self.two_player and self.game.is_machine_turn():
+            return                              # machine's turn: it plays, no listening cue
         ply = len(self.game.board.move_stack)
         if ply == self._last_prompt_ply:
             return
         self._last_prompt_ply = ply
-        self._say("Your move.")
+        self._say(self._turn_prompt())
+
+    def _turn_prompt(self) -> str:
+        """The spoken 'go' cue for a human turn. Two-player mode names the side to move
+        (White = player one, Black = player two) so both players know who's up."""
+        if self.two_player:
+            return ("Player one, your move." if self.game.turn() == chess.WHITE
+                    else "Player two, your move.")
+        return "Your move."
 
     # -- top-level dispatch -------------------------------------------------- #
     def handle(self, transcript: str) -> str:
@@ -373,6 +392,9 @@ class ChessMachine:
         return self._say(text)
 
     def _do_engine_move(self, prefix: str) -> str:
+        if self.two_player:
+            return self._say("We're in two-player mode — tell me each player's move and "
+                             "I'll move the pieces and comment.")
         if self.game.is_game_over():
             return self._say(self.game.result_text())
         if not self.game.is_machine_turn():
@@ -412,8 +434,8 @@ class ChessMachine:
     def _play_opponent_move(self, move: chess.Move) -> str:
         """Actuate the human's move, then auto-reply with the engine if it's our turn."""
         spoken = self._play_move(move, "Okay,")   # _play_move speaks internally
-        if (self.cfg.app.auto_reply and not self.game.is_game_over()
-                and self.game.is_machine_turn()):
+        if (not self.two_player and self.cfg.app.auto_reply
+                and not self.game.is_game_over() and self.game.is_machine_turn()):
             try:
                 reply = self._do_engine_move("My move:")
             except Exception:  # noqa: BLE001 - the opponent's move already stuck
@@ -435,12 +457,14 @@ class ChessMachine:
     def _really_new_game(self) -> str:
         notes = self.choreo.setup_starting_position(self.game.board)
         self.game.reset()
+        self._opening_said = 0
+        self._opening_depth = 0
         if notes:
             # Couldn't fully reset the pieces — don't claim it's done, and don't
             # start playing on a board the human still has to set up.
             return self._say("New game. " + " ".join(notes))
         spoken = self._say("New game. The board is reset.")
-        if self.cfg.app.auto_reply and self.game.is_machine_turn():
+        if not self.two_player and self.cfg.app.auto_reply and self.game.is_machine_turn():
             return spoken + " " + self._do_engine_move("I'll open with")
         return spoken
 
@@ -507,7 +531,7 @@ class ChessMachine:
         self._led("off")
         # Whose move this is (side to move vs. machine colour): the relay prototype
         # uses it to pick a motor direction; the crane ignores it.
-        mover_is_machine = board_before.turn == self.game.machine_color
+        mover_is_machine = board_before.turn == self.game.machine_color and not self.two_player
         # Clear any captured piece to storage NOW (blocking) and learn whether the
         # move is even possible, WITHOUT yet moving the piece itself. For a plain
         # move this touches no motor, so nothing moves before we speak.
@@ -522,6 +546,9 @@ class ChessMachine:
         comment = self._move_comment(board_before, move, san)
         if comment:
             text += " " + comment
+        opening = self._opening_comment()
+        if opening:
+            text += " " + opening
         # If the opponent (this move) just punished a blunder the machine held
         # back, own it now — otherwise it stays unspoken.
         critique = self._resolve_self_critique(board_before)
@@ -682,6 +709,28 @@ class ChessMachine:
             if piece is not None:
                 parts.append(f"a quiet {chess.piece_name(piece.piece_type)} move")
         return ", ".join(parts)
+
+    def _opening_comment(self) -> str:
+        """Name the opening as it's recognized, at most twice per game. Comments the
+        first time a named line (>=2 plies) is identified, and again if the game
+        deepens into a named variation. Uses a bundled opening table — Stockfish scores
+        positions but doesn't name openings — so offbeat lines not in the table are left
+        unnamed (that's how the count ends up 'once or twice, or not at all')."""
+        if not self.cfg.app.comment_openings or self._opening_said >= 2:
+            return ""
+        san_moves = [san for _, san in self.game.history]
+        if len(san_moves) > 24:                       # opening phase only (~12 moves)
+            return ""
+        found = identify_opening(san_moves)
+        if found is None:
+            return ""
+        name, depth = found
+        if depth < 2 or depth <= self._opening_depth:  # nothing new/deeper to name yet
+            return ""
+        self._opening_depth = depth
+        self._opening_said += 1
+        lead = "That's" if self._opening_said == 1 else "This is now"
+        return f"{lead} {name}."
 
     def _resolve_self_critique(self, board_before: chess.Board) -> str:
         """Voice a held-back self-critique iff the move just played (by the
