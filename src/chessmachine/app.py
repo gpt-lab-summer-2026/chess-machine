@@ -121,7 +121,14 @@ def main(argv=None) -> int:
         finally:
             machine.close()
         return 0
-    machine.run()
+    try:
+        machine.run()
+    except KeyboardInterrupt:
+        # run()'s own try/finally already parked the crane and closed everything;
+        # this just swaps the default raw traceback for a clean exit, since Ctrl-C
+        # is the documented way to stop the autostart loop (deploy/boot_chessmachine.sh).
+        print("\nStopped.", file=sys.stderr)
+        return 130
     return 0
 
 

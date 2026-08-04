@@ -105,29 +105,52 @@ python -m chessmachine --config config/config.yaml
 
 ## 7. Autostart (optional)
 
-Run the SLM as its own service so systemd supervises it (don't background a
-process from `ExecStartPre` — systemd may reap it).
+Two independent pieces, because they have different needs: `llama-server` has no
+console UI and should be supervised headlessly; `chessmachine` speaks/listens and
+is much easier to babysit if its `you> ...` / `[speaker] ...` console mirror is
+visible on the screen attached to the Pi.
 
-`/etc/systemd/system/llama-server.service`:
+### 7a. llama-server — systemd service
 
-```ini
-[Unit]
-Description=llama-server (chess SLM)
-After=network.target
+Run it as its own service so systemd supervises restarts (don't background a
+process from `ExecStartPre` — systemd may reap it). The repo ships the unit
+file, adjust `User=`/`WorkingDirectory=`/the model filename for your box:
 
-[Service]
-User=pi
-WorkingDirectory=/home/pi/chess-machine
-ExecStart=/usr/local/bin/llama-server -m models/slm/Llama-3.2-3B-Instruct-Q4_K_M.gguf -c 2048 --parallel 1 -t 3 --cache-reuse 256 --host 127.0.0.1 --port 8080
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo cp deploy/llama-server.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now llama-server
+curl http://127.0.0.1:8080/health   # {"status":"ok"} once the model has loaded
 ```
 
-`/etc/systemd/system/chess-machine.service`:
+### 7b. chessmachine — pick ONE of these
+
+**Option A — console autologin (recommended if a screen is attached).** If
+`raspi-config` (or `/etc/systemd/system/getty@tty1.service.d/`) is set to
+auto-login a user on the physical console, launch the game from that user's
+`~/.bash_profile` so its console output lands on the attached screen instead of
+only `journalctl`. `deploy/boot_chessmachine.sh` does the actual work (waits for
+`llama-server`, then runs the app and restarts it if it crashes; Ctrl-C stops the
+restart loop and hands back a normal shell — it does NOT log you out):
+
+```bash
+# in ~/.bash_profile, guarded to the physical console so an ssh/scp login
+# (also a "login shell") can't ALSO spawn it:
+if [ -t 0 ] && [ "$(tty 2>/dev/null)" = "/dev/tty1" ] \
+   && ! pgrep -u "$USER" -f "[c]hessmachine --config" >/dev/null 2>&1; then
+    /home/pi/chess-machine/deploy/boot_chessmachine.sh
+fi
+```
+
+The `[c]hessmachine` bracket is deliberate: `pgrep -f` matches every process's
+full command line, including its own, so an unbracketed pattern matches pgrep's
+own argv and the guard would never fire.
+
+**Option B — fully headless (no monitor, no autologin).** Run it as a second
+systemd service instead:
 
 ```ini
+# /etc/systemd/system/chess-machine.service
 [Unit]
 Description=Chess Machine
 After=network.target sound.target llama-server.service
@@ -144,8 +167,12 @@ WantedBy=multi-user.target
 ```
 
 ```bash
-sudo systemctl enable --now llama-server chess-machine
+sudo systemctl enable --now chess-machine
 ```
+
+Its console mirror then only shows up in `journalctl -u chess-machine -f` (no
+physical-console output), which is fine for a headless install but makes live
+debugging more awkward than option A.
 
 ## Performance notes
 
