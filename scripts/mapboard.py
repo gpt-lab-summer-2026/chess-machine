@@ -14,7 +14,7 @@ head at a bilinear estimate of any square, so you only fine-tune the last few mm
 before `set`. Capture the corners first (a1 h1 a8 h8), then walk the rest.
 
 Workflow:
-  1. `home`                 base self-homes to the a8 switch; start winch up + cart in
+  1. `home`                 base + cart self-home to their switches; start the winch UP
   2. corners first:         jog to a1 (`a`/`r`/`w`), `w` down until the magnet touches,
                             `set a1`; repeat h1, a8, h8
   3. `next` (or `goto e4`)  drive to the estimated next square, fine-jog, `set e4`
@@ -83,8 +83,8 @@ class BoardMapper:
     def connect(self) -> None:
         print(f"Connecting ({self.cfg.motion.backend}) ...", flush=True)
         self.ctl.connect()
-        print("Ready. The base self-homes to its a8 switch; start the winch (up) and "
-              "cart (inner stop) at home, then `home`.")
+        print("Ready. The base + cart self-home to their limit switches; only the winch "
+              "is sensorless, so start it UP, then `home`.")
 
     def close(self) -> None:
         try:

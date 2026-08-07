@@ -35,12 +35,11 @@
  * control, so the feed `F` is accepted and IGNORED. Only ONE motor is driven at a
  * time (see AXIS_STAGGER_MS). Lines starting with '#' are debug.
  *
- * The axes are step-counted from a boot-home of 0. The BASE now has a real limit
- * switch (a8 side, backed by a hard stop) it homes against, so it need NOT be
- * hand-placed at boot — set A_ENDSTOP_STEPS to enable it. The winch + cart are still
- * sensorless, so BOOT MUST START WITH the winch at travel/top and the cart at 0
- * (nearest the tower); HOME steps those back to 0 by count. The soft limits
- * (R_MIN/R_MAX, A_MIN/A_MAX) and the base switch keep every move off the physical ends.
+ * The axes are step-counted from a boot-home of 0. The BASE (a8 side) and the CART
+ * (inner home) each have a real limit switch they home against, so neither needs to be
+ * hand-placed at boot. Only the WINCH is still sensorless, so BOOT MUST START WITH the
+ * winch at travel/top; HOME returns it to 0 by count. The soft limits (R_MIN/R_MAX,
+ * A_MIN/A_MAX) and both switches keep every move off the physical ends.
  *
  * Board: any ESP32 dev module. No external libraries. EDIT the pin + calibration
  * section for your wiring / measurements.
@@ -68,6 +67,7 @@
 #define P_IN4 17
 #define MAGNET_PIN 19  // relay "1" for the electromagnet     [single relay]
 #define A_ENDSTOP_PIN 16  // base limit switch -> GND (INPUT_PULLUP). Active (a8 / hard stop) = LOW.
+#define R_ENDSTOP_PIN 32  // rail HOME limit switch -> GND (INPUT_PULLUP). Active (cart at inner home) = LOW.
 
 // ================ EDIT: status LED ===========================================
 // Tells the player what the machine is doing: SOLID = listening (speak now),
@@ -130,6 +130,17 @@ const int R_STEP_DIR = -1;           // physical coil direction, applied in rail
 // comes from the shorter us period here (delay() can't do sub-ms; 0.1 truncated to
 // 0 = too fast = stall). Lower = faster; raise if the loaded gearbox buzzes/stalls.
 const unsigned long R_STEP_DELAY_US = 1500;  // microseconds per HALF step (was 3000)
+// -- rail HOME limit switch: absolute home reference (inner, step 0) ----------
+// A normally-open switch from R_ENDSTOP_PIN to GND (INPUT_PULLUP -> pressed = LOW),
+// tripped when the cart reaches its INNER home (step 0). HOME drives the cart IN until
+// it trips and zeroes there, so the cart self-homes (no hand-placing) and can't be
+// ground into the tower. false = fall back to the sensorless count-home.
+const bool R_HOME_TO_SWITCH = true;
+const bool R_ENDSTOP_ACTIVE_LOW = true;   // switch to GND + internal pull-up: pressed = LOW
+const int  R_HOME_DIR = -1;               // OUTPUT step sign that drives the cart TOWARD home (inward).
+                                          // Flip if HOME runs the cart OUTWARD instead of onto the switch.
+const long R_HOME_MAX_STEPS = 22000;      // seek cap (~full travel + margin) before giving up
+const long R_HOME_BACKOFF_STEPS = 200;    // release + slow re-approach for a repeatable trigger edge
 
 // ================ EDIT: base (A) stepper calibration =========================
 // steps/deg = motor half-steps per rev (4096) * gear ratio / 360. Fine-tune from a
@@ -447,12 +458,49 @@ void railRelease() {  // de-energize all rail coils (ESTOP / boot)
   digitalWrite(R_IN3, LOW);
   digitalWrite(R_IN4, LOW);
 }
+// --- rail HOME limit switch (inner, step 0) = absolute home reference --------
+bool railSwitchPressed() {
+  return digitalRead(R_ENDSTOP_PIN) == (R_ENDSTOP_ACTIVE_LOW ? LOW : HIGH);
+}
+// One raw half-step in OUTPUT direction `dir` (+out / -in); no count. Applies
+// R_STEP_DIR like railStep, so railStepOnce(R_HOME_DIR) drives the cart toward home.
+void railStepOnce(int dir) {
+  g_rStepPhase = (g_rStepPhase + dir * R_STEP_DIR + 8) & 7;
+  railWritePhase(g_rStepPhase);
+  const unsigned long stepMs = R_STEP_DELAY_US / 1000;
+  const unsigned int  stepUs = R_STEP_DELAY_US % 1000;
+  if (stepMs) delay(stepMs);
+  if (stepUs) delayMicroseconds(stepUs);
+}
+// Drive the cart INWARD to the home switch, stopping the instant it trips (never
+// grinds the tower). Two-pass for a repeatable edge. Leaves the cart ON the switch;
+// returns false if not found within R_HOME_MAX_STEPS (broken / miswired / wrong dir).
+bool railSeekSwitch() {
+  long i;
+  if (railSwitchPressed()) {                                        // already on it: back off (outward)
+    for (i = 0; railSwitchPressed() && i < R_HOME_MAX_STEPS; i++) railStepOnce(-R_HOME_DIR);
+    for (i = 0; i < R_HOME_BACKOFF_STEPS; i++) railStepOnce(-R_HOME_DIR);
+  }
+  for (i = 0; !railSwitchPressed() && i < R_HOME_MAX_STEPS; i++) railStepOnce(R_HOME_DIR);
+  if (!railSwitchPressed()) return false;                           // never reached it
+  for (i = 0; i < R_HOME_BACKOFF_STEPS; i++) railStepOnce(-R_HOME_DIR);            // back off
+  for (i = 0; !railSwitchPressed() && i < R_HOME_BACKOFF_STEPS * 4; i++) railStepOnce(R_HOME_DIR);
+  return railSwitchPressed();
+}
 void railStep(long steps) {
+  if (steps == 0) return;
   int dir = (steps >= 0) ? 1 : -1;
   long n = labs(steps);
   const unsigned long stepMs = R_STEP_DELAY_US / 1000;   // whole-ms part of the period
   const unsigned int  stepUs = R_STEP_DELAY_US % 1000;   // sub-ms remainder
   for (long i = 0; i < n; i++) {
+    // Never drive INWARD past the home switch (into the tower): stop + re-zero there.
+    if (R_HOME_TO_SWITCH && dir == R_HOME_DIR && railSwitchPressed()) {
+      g_rStepCount = 0;
+      g_curR = R_MIN_MM;
+      Serial.println("# rail home switch hit; position re-zeroed to home");
+      return;
+    }
     g_rStepPhase = (g_rStepPhase + dir * R_STEP_DIR + 8) & 7;  // R_STEP_DIR inverts the physical direction
     railWritePhase(g_rStepPhase);
     // Split the period so delay() (>=1 ms) YIELDS to the RTOS each step. A pure
@@ -471,11 +519,17 @@ void railMoveTo(float rmm) {
   g_curR = rmm;
 }
 void railHome() {
-  // PURE STEP COUNT — never seeks a physical stop (the stepper can't take being
-  // slammed). Just walks the net steps back to 0 (cart nearest the tower). Boot
-  // MUST start the cart at 0; the R_MIN/R_MAX soft clamp keeps moves off both ends.
-  railStep(-g_rStepCount);
-  g_rStepCount = 0;
+  // Seek the inner HOME switch and zero there — an ABSOLUTE home that survives power
+  // cycles + open-loop drift, no hand-placing the cart (the switch trips gently, well
+  // before the tower, so the stepper is never slammed). If the switch isn't found (or
+  // R_HOME_TO_SWITCH is off): fall back to the sensorless count-back-to-0.
+  if (R_HOME_TO_SWITCH && railSeekSwitch()) {
+    g_rStepCount = 0;   // the switch IS home (inner, step 0)
+  } else {
+    if (R_HOME_TO_SWITCH) Serial.println("# WARN rail home switch not found; count-homing instead");
+    railStep(-g_rStepCount);
+    g_rStepCount = 0;
+  }
   g_curR = R_MIN_MM;
 }
 
@@ -514,7 +568,8 @@ void doMoveRA(float rmm, float adeg) {
 void doStatus() {
   char buf[80];
   snprintf(buf, sizeof(buf), "R%.2f A%.2f H%.2f MAG%d ENDR%d ENDA%d",
-           g_curR, g_curA, g_curH, g_magnetOn ? 1 : 0, 0, baseSwitchPressed() ? 1 : 0);  // ENDA = base switch
+           g_curR, g_curA, g_curH, g_magnetOn ? 1 : 0,
+           railSwitchPressed() ? 1 : 0, baseSwitchPressed() ? 1 : 0);  // ENDR = rail home switch, ENDA = base
   replyOK(buf);
 }
 
@@ -771,6 +826,7 @@ void setup() {
   pinMode(A_IN3, OUTPUT);
   pinMode(A_IN4, OUTPUT);
   pinMode(A_ENDSTOP_PIN, INPUT_PULLUP);  // base limit switch to GND (a8 / hard stop)
+  pinMode(R_ENDSTOP_PIN, INPUT_PULLUP);  // rail HOME limit switch to GND (cart inner home)
   pinMode(MIC_PIN, INPUT);               // MAX4466 analog mic (ADC1, input-only pin)
   pinMode(LED_PIN, OUTPUT);              // status LED (GPIO12: strapping pin, keep low at boot)
   ledSet(LED_MODE_OFF);                  // dark until the Pi says otherwise

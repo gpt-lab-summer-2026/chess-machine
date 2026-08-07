@@ -137,8 +137,8 @@ class Calibrator:
         self.ctl.connect()
         self.cur = self.ctl.get_cal()
         print("Firmware calibration:", self._fmt_cal(self.cur))
-        print("Assuming steppers are AT HOME (0). The base self-homes to its a8 switch on"
-              " `home`; park the winch (up) + cart (inner stop) before touching.")
+        print("Assuming steppers are AT HOME (0). The base + cart self-home to their switches"
+              " on `home`; only the winch is sensorless, so park it UP before touching.")
 
     def close(self) -> None:
         try:

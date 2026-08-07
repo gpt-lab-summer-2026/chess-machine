@@ -24,6 +24,7 @@ class MockMotion(MotionController):
         self._cal = {"aspd": 43.284, "ahome": 1.063, "rspm": 66.8, "aend": 0}
         self._steps = {"a": 0, "r": 0, "w": 0}
         self._base_switch = False   # base limit switch (ENDA) pressed?
+        self._rail_switch = False   # rail HOME limit switch (ENDR) pressed?
 
     def connect(self) -> None:
         self.connected = True
@@ -65,7 +66,7 @@ class MockMotion(MotionController):
         return {
             "x": self.x, "z": self.z, "height": self.height,
             "magnet": self.magnet_on, "homed": self.homed,
-            "endstop_a": self._base_switch,
+            "endstop_a": self._base_switch, "endstop_r": self._rail_switch,
         }
 
     def estop(self) -> None:

@@ -26,10 +26,18 @@ A .bak copy is made before the first write of a session. Note the distinction: w
 regenerates `table` from `anchors` — would undo it. If the anchor itself was mis-measured
 (which is what a winning B usually means), pass `anchor` to fix it at the source.
 
+Or DRIVE there and tweak by hand: when neither A nor B lands right, `drive <sq>` goes
+to a candidate and holds at the pick depth so you can nudge the head onto the piece with
+`jb`/`jr`/`jw` (jog base/rail/winch), `mag on` to test the grab, then `here` saves the
+corrected pose (`here anchor` also fixes the source anchor) — the manual twin of accept.
+
 Interactive commands (like scripts/anchor.py):
     <sq>            run A then B          a|b|c <sq>   run one candidate
     abc <sq>        run all three         show <sq>    print all three, move nothing
     accept <sq> [a|b|c] [anchor]          worst <axis> [n]
+    drive <sq> [a|b|c]   go there + hold at the pick depth for hand-tweaking
+    jb|jr|jw <n>         jog base/rail/winch by n steps (live)    pos   show step position
+    here [<sq>] [anchor] save the CURRENT (tweaked) pose as <sq>  (defaults to last driven)
     lift <n> | dwell <s> | settle <s>     adjust live
     home | wtop | mag on|off              raw helpers (wtop = full raise to travel)
     help | quit
@@ -66,6 +74,7 @@ class Verifier:
         self.dwell, self.settle, self.lift = dwell, settle, lift
         self.ctl = None
         self._backed_up = False
+        self._cur_sq: str | None = None   # last square `drive`n/`run`, so `here` can default to it
         self._load()
 
     def _load(self) -> None:
@@ -137,6 +146,7 @@ class Verifier:
         cs = self.candidates(sq)
         if not cs:
             return
+        self._cur_sq = sq.lower()
         print(f"=== {sq} ===")
         # Full raise before the first candidate: the base/rail hop to a NEW square can
         # be long, and only a full lift is guaranteed to clear other pieces.
@@ -146,7 +156,43 @@ class Verifier:
                 self._attempt(k, cs[k])
         self.ctl.goto_steps(winch=WINCH_TRAVEL)
 
-    # -- accepting a candidate ----------------------------------------------- #
+    # -- manual drive / hand-tweak ------------------------------------------- #
+    def drive(self, sq: str, which: str = "b") -> None:
+        """Drive to a candidate and HOLD at its pick depth so it can be hand-tweaked:
+        jog base/rail/winch onto the piece, then `here` to save the corrected pose."""
+        if self.ctl is None:
+            print("   ! not connected — re-run with --go to move the crane")
+            return
+        cs = self.candidates(sq)
+        if not cs:
+            return
+        c = cs.get(which, cs["b"])
+        self._cur_sq = sq.lower()
+        print(f"   drive {self._cur_sq} -> {LABELS[which].strip()}: "
+              f"base={c['base']} rail={c['rail']} winch={c['winch']}")
+        self.ctl.magnet(False)                           # never carry a piece while repositioning
+        self.ctl.goto_steps(winch=WINCH_TRAVEL)          # raise before the (long) base/rail hop
+        self.ctl.goto_steps(base=c["base"], rail=c["rail"])
+        time.sleep(self.settle)
+        self.ctl.goto_steps(winch=c["winch"])            # lower to the candidate pick depth
+        print(f"   holding at the pick depth. jog `jb/jr/jw <n>`, `mag on` to test the grab,"
+              f" then `here [anchor]` to save {self._cur_sq}'s tweaked pose.")
+
+    def jog(self, axis: str, n: int) -> None:
+        if self.ctl is None:
+            print("   ! not connected — re-run with --go")
+            return
+        {"b": self.ctl.jog_base, "r": self.ctl.jog_rail, "w": self.ctl.jog_winch}[axis](n)
+        self.pos()
+
+    def pos(self) -> None:
+        if self.ctl is None:
+            print("   ! not connected — re-run with --go")
+            return
+        s = self.ctl.get_steps()
+        print(f"   pos: base={s.get('a', 0)} rail={s.get('r', 0)} winch={s.get('w', 0)}")
+
+    # -- accepting a candidate / saving a tweak ------------------------------ #
     def accept(self, sq: str, which: str = "b", also_anchor: bool = False) -> None:
         sq = sq.lower()
         cs = self.candidates(sq)
@@ -155,30 +201,53 @@ class Verifier:
         if which not in cs:
             print("   ! pick one of a, b, c")
             return
-        new = cs[which]
+        self._commit(sq, cs[which], LABELS[which].strip(), also_anchor)
+
+    def here(self, sq: str | None = None, also_anchor: bool = False) -> None:
+        """Save the CURRENT (hand-tweaked) crane pose as <sq>'s coords. Reads the live
+        step counts, so jog the head onto the piece (winch at the touch depth) first.
+        Defaults to the last square you `drive`/`run`."""
+        if self.ctl is None:
+            print("   ! not connected — re-run with --go")
+            return
+        sq = (sq or self._cur_sq or "").lower()
+        if not sq:
+            print("   ! which square? `here <sq>` (or `drive <sq>` first)")
+            return
+        if sq not in self.table:
+            print(f"   ! {sq} is not in the map table")
+            return
+        s = self.ctl.get_steps()
+        new = {"base": int(s.get("a", 0)), "rail": int(s.get("r", 0)), "winch": int(s.get("w", 0))}
+        self._commit(sq, new, "M manual (current pose)", also_anchor)
+
+    def _commit(self, sq: str, new: dict, label: str, also_anchor: bool) -> None:
+        """Write `new` into table[sq] (and anchors[sq] if also_anchor), backing the map
+        up once per session. Shared by accept (a/b/c) and here (manual pose)."""
+        sq = sq.lower()
+        if sq not in self.table:
+            print(f"   ! {sq} is not in the map table")
+            return
         if not self._backed_up:
             bak = self.map_path.with_suffix(self.map_path.suffix + ".bak")
             shutil.copy2(self.map_path, bak)
             self._backed_up = True
             print(f"   backed up {self.map_path} -> {bak}")
         old = dict(self.table[sq])
+        new = {k: int(new[k]) for k in KEYS}
         self.table[sq] = dict(new)
         note = ""
         if also_anchor:
-            if sq in self.anchors:
-                self.anchors[sq] = dict(new)
-                note = " + anchor"
-            else:
-                self.anchors[sq] = dict(new)
-                note = " + NEW anchor"
+            note = " + anchor" if sq in self.anchors else " + NEW anchor"
+            self.anchors[sq] = dict(new)
         self.map_path.write_text(json.dumps(self.data, indent=2) + "\n")
-        print(f"   {sq}: table{note} = {LABELS[which].strip()}  {old} -> {dict(new)}")
+        print(f"   {sq}: table{note} = {label}  {old} -> {new}")
         if also_anchor:
             self._load()          # anchors changed -> refit so later predictions follow
             print("   refitted the model on the updated anchors")
         elif sq in self.anchors:
             print(f"   NOTE anchors[{sq}] still holds the old value; an `anchor.py map`"
-                  f" refit would undo this. Use `accept {sq} {which} anchor` to fix the source.")
+                  f" refit would undo this. Add `anchor` to fix the source.")
 
     # -- lifecycle ----------------------------------------------------------- #
     def connect(self) -> None:
@@ -202,6 +271,7 @@ class Verifier:
 
 
 HELP = ("Commands: <sq> | a|b|c <sq> | abc <sq> | show <sq> | accept <sq> [a|b|c] [anchor] | "
+        "drive <sq> [a|b|c] | jb|jr|jw <n> | pos | here [<sq>] [anchor] | "
         "worst <axis> [n] | lift <n> | dwell <s> | settle <s> | home | wtop | mag on|off | quit")
 
 
@@ -282,6 +352,18 @@ def main(argv=None) -> int:
                 elif c == "accept" and arg:
                     which = rest[0] if rest and rest[0] in LABELS else "b"
                     v.accept(arg, which, also_anchor="anchor" in rest)
+                elif c == "drive" and arg:
+                    which = rest[0] if rest and rest[0] in LABELS else "b"
+                    v.drive(arg, which)
+                elif c in ("jb", "jr", "jw") and arg:
+                    v.jog(c[1], int(arg))
+                elif c == "pos":
+                    v.pos()
+                elif c == "here":
+                    if arg == "anchor":               # `here anchor` -> current square + anchor
+                        v.here(None, also_anchor=True)
+                    else:
+                        v.here(arg, also_anchor=("anchor" in rest))
                 elif c == "worst" and arg:
                     v.worst(arg, int(parts[2]) if len(parts) > 2 else 6)
                 elif c == "lift" and arg:

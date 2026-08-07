@@ -18,7 +18,7 @@ Implemented by [`firmware/esp32_chess`](../firmware/esp32_chess/) (device) and
 | `GOTO [A<steps>][R<steps>][W<steps>]` | `OK` | absolute step-count move (stepmap backend): drive each given axis to an absolute half-step count (boot-home = 0, the `STEPS` space) |
 | `PULLEY H<mm> [F<mm/min>]` | `OK` | set magnet height above the board |
 | `MAG ON` / `MAG OFF` | `OK` | energize / release the electromagnet |
-| `STATUS` | `OK R<f> A<f> H<f> MAG<0\|1> ENDR<0\|1> ENDA<0\|1>` | current state; `ENDA` = base limit switch (1 = pressed, at a8) |
+| `STATUS` | `OK R<f> A<f> H<f> MAG<0\|1> ENDR<0\|1> ENDA<0\|1>` | current state; `ENDR` = rail home switch (1 = cart at inner home), `ENDA` = base limit switch (1 = at a8) |
 | `STEPS` | `OK STEPS A<n> R<n> W<n>` | raw physical step counts from boot-home (base, rail, winch) — position for step-space calibration |
 | `CAL [ASPD v][AHOME v][RSPM v][AEND v]` | `OK CAL ASPD.. AHOME.. RSPM.. AEND..` | read/set live calibration (base steps/deg, base home offset, rail steps/mm, base switch offset); RAM only |
 | `JOG [R<n>][A<n>][W<n>]` | `OK` | raw signed-half-step jog of any axis (bench calibration); updates step counters, not mm/deg |

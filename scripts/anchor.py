@@ -19,11 +19,10 @@ needs fewer winch steps to touch. Jog the winch down to touch at each corner and
 it's baked into the map like base/rail.
 
 Workflow:
-  1. `home`             establish step 0 on all axes. The BASE self-homes to its a8
-                        limit switch (no hand-placing); the WINCH + CART are still
-                        sensorless, so start THEM at home (winch up, cart at the inner
-                        stop). One-time: run `seek` to measure the switch offset and
-                        bake it into A_ENDSTOP_STEPS (see below).
+  1. `home`             establish step 0 on all axes. The BASE (a8) and CART (inner home)
+                        each self-home to a limit switch (no hand-placing); only the WINCH
+                        is sensorless, so start it UP. One-time: run `seek` to measure the
+                        base switch offset -> A_ENDSTOP_STEPS (see below).
   2. jog to a corner:   `a <steps>` (base), `r <steps>` (rail)
   3. `w <steps>`        jog the winch DOWN until the magnet just touches the square
                         (`mag on` to feel it grab); the winch count is its depth
@@ -43,12 +42,15 @@ Commands:
   load <path>     load anchors from a saved map file (to re-fit / add more)
   offset <n>      add n base steps to EVERY square (board-wide rotation drift fix); `offset`
                   alone shows the total, `offset reset` zeroes it. `save` bakes it in.
-  map             fit the spline over ALL anchors; print deltas, sag, leave-one-out error
+  fit model|spline  choose the interpolation: `spline` = thin-plate (exact, honors every
+                  anchor but chases noise); `model` = stiff parametric least-squares
+                  (motion.predict) that resists noise so MORE anchors help. `map`/`goto`/`save` follow it.
+  map             fit over ALL anchors; print deltas/sag/LOO (spline) or formulas/LOO (model)
   goto <sq>       drive to <sq>'s fitted base/rail (verify)
   pawns [n]       physical test: push every pawn fwd one rank x2 (2->3->4, 7->6->5),
-                  re-homing every n transfers (default 6). Set up pawns on ranks 2 & 7.
+                  re-homing every n transfers (default 3). Set up pawns on ranks 2 & 7.
   backrank [n]    physical test: move rank 1 -> rank 2, then rank 8 -> rank 7 (in order),
-                  re-homing every n transfers (default 6). Set up pieces on ranks 1 & 8.
+                  re-homing every n transfers (default 3). Set up pieces on ranks 1 & 8.
   seek            measure the base limit-switch offset -> A_ENDSTOP_STEPS (HOME first)
   mag on|off      electromagnet
   home | pos | save [path] | estop | quit
@@ -171,12 +173,15 @@ class StepMap:
                                              # square by build(); baked into the anchors on save. Corrects a
                                              # steady drift after the crane structure shifts (`offset` cmd).
         self._loaded_path: str | None = None  # last file `load`ed; save() defaults back to it
+        self.fit_mode = "spline"             # "spline" = thin-plate (exact interpolant) | "model" = stiff
+                                             # parametric least-squares fit (motion.predict.BoardModel):
+                                             # can't bend to one anchor, so MORE anchors reduce distortion
 
     def connect(self) -> None:
         print(f"Connecting ({self.cfg.motion.backend}) ...", flush=True)
         self.ctl.connect()
-        print("Ready. The base self-homes to its a8 limit switch; start the winch (up) "
-              "and cart (inner stop) at home, then `home` to zero the counters.")
+        print("Ready. The base + cart self-home to their limit switches; only the winch "
+              "is sensorless, so start it UP, then `home` to zero the counters.")
 
     def close(self) -> None:
         try:
@@ -212,6 +217,8 @@ class StepMap:
         print(f"   set {sq.lower()}: base={a} rail={r} winch={w}   (ground truth)")
 
     def build(self) -> dict | None:
+        if self.fit_mode == "model":
+            return self._build_model()
         names = list(self.anchors)
         fits = _fit(self.anchors, names)
         if fits is None:
@@ -226,10 +233,38 @@ class StepMap:
                 table[FILES[f] + str(r + 1)] = entry
         return table
 
+    def _build_model(self) -> dict | None:
+        """Stiff parametric fit (motion.predict.BoardModel): a low-order least-squares
+        model of the crane kinematics with outlier rejection. It CAN'T bend to a single
+        anchor, so more anchors AVERAGE OUT measurement noise instead of adding wiggles
+        — the opposite of the exact spline. Best when anchors are noisy / you're fighting
+        'fix one square, distort another'."""
+        from chessmachine.motion.geometry import BoardGeometry
+        from chessmachine.motion.predict import BoardModel
+        if len(self.anchors) < 4:
+            print(f"   model fit needs >=4 anchors (have {len(self.anchors)})")
+            return None
+        try:
+            bm = BoardModel(BoardGeometry(self.cfg.motion.geometry), self.anchors)
+        except ValueError as e:  # noqa: BLE001 - degenerate anchors
+            print(f"   model fit failed ({e}). The stiff model needs anchors that span R and"
+                  " theta — 4 symmetric corners alone are degenerate for its curvature terms."
+                  " Add a CENTRE anchor (d4/e5) + an edge midpoint or two, then `fit model` again."
+                  " (With only the 4 corners, use `fit spline`.)")
+            return None
+        table = bm.predict_all()
+        if self._base_offset:
+            for entry in table.values():
+                entry["base"] += self._base_offset
+        return table
+
     def report(self) -> dict | None:
         table = self.build()
         if not table:
             return None
+        if self.fit_mode == "model":
+            self._report_model()
+            return table
         A = self.anchors
 
         def have(*sqs: str) -> bool:
@@ -269,6 +304,25 @@ class StepMap:
         else:
             print("   (add >=5 anchors for a leave-one-out accuracy check)")
         return table
+
+    def _report_model(self) -> None:
+        from chessmachine.motion.geometry import BoardGeometry
+        from chessmachine.motion.predict import BoardModel
+        bm = BoardModel(BoardGeometry(self.cfg.motion.geometry), self.anchors)
+        n = len(self.anchors)
+        print(f"   STIFF parametric model over {n} anchors (least-squares of the crane "
+              "kinematics; no single anchor can bend it):")
+        for key in KEYS:
+            fit = bm.fits[key]
+            loo, _ = bm.leave_one_out(key)
+            mm = f" (~{loo / 50.0:.1f} mm)" if key == "rail" else ""
+            rej = ("  dropped " + ",".join(f"{s}({r:+.0f})" for s, r in fit.rejected.items())
+                   if fit.rejected else "")
+            print(f"     {fit.formula()}")
+            print(f"        used {fit.n_used}/{n}   in-RMS {fit.rms:.0f}   "
+                  f"leave-one-out {loo:.0f}{mm}{rej}")
+        print("   LOO is the honest accuracy. Shrink it with SPANNING anchors (4 corners +"
+              " a centre, then edge mids) — clustered / bad-square anchors don't help a stiff fit.")
 
     def goto(self, sq: str) -> None:
         table = self.build()
@@ -448,6 +502,7 @@ def main() -> int:
     if args.load:
         m.load(args.load)
     print("Commands: a/r/w <n> | wtop | pos | set <sq> | anchors | del <sq> | load <path> | offset <n> | "
+          "fit model|spline | "
           "map | goto <sq> | pawns [n] | backrank [n] | seek | mag on|off | home | save | quit")
 
     try:
@@ -484,12 +539,21 @@ def main() -> int:
                         m.offset(int(arg) if arg else None)
                 elif c in ("map", "build"):
                     m.report()
+                elif c == "fit":
+                    if arg and arg.lower() in ("model", "spline"):
+                        m.fit_mode = arg.lower()
+                    elif arg:
+                        print("   ! fit model | fit spline");
+                    stiff = m.fit_mode == "model"
+                    print(f"   fit mode = {m.fit_mode}  "
+                          + ("(stiff least-squares — resists noise, more anchors help)" if stiff
+                             else "(thin-plate spline — exact through each anchor)"))
                 elif c == "goto" and arg:
                     m.goto(arg)
                 elif c == "pawns":
-                    m.pawn_sweep(int(arg) if arg else 6)
+                    m.pawn_sweep(int(arg) if arg else 3)
                 elif c == "backrank":
-                    m.backrank_sweep(int(arg) if arg else 6)
+                    m.backrank_sweep(int(arg) if arg else 3)
                 elif c in ("seek", "findsw"):
                     off = m.ctl.seek_base_switch()
                     print(f"   base limit switch at {off} steps from home -> bake "
