@@ -179,7 +179,14 @@ const bool A_HOME_TO_SWITCH = true;       // HOME seeks the switch and adopts A_
 // boot MUST start with the cart there. a1 sits at the FAR hard stop (r_max).
 const float R_MIN_MM = 117.5f;   // cart R at the INNER mechanical stop (= home = step 0)
 const float R_MAX_MM = 387.0f;   // cart R at the FAR stop (= a1). Soft clamp = the physical stop.
-const float A_MIN_DEG = -55.0f;  // reachable sweep (h1 side)
+// The h1/-theta side has no switch and no hard stop, so the sweep there is bounded
+// only by this soft limit. It must clear the CAPTURE DISH, which sits well off the
+// board edge: at graveyard_center_deg -71.1 the dish scatter plus the winch offset
+// drive the CART to -77.2 deg (see scripts/verifymap.py / the geometry). Widened from
+// -55 for that -- the old value clamped the dish silently (clampf below just saturates,
+// it does not error), so captures piled up short of the dish. Keep a margin below the
+// most negative cart angle any graveyard slot needs.
+const float A_MIN_DEG = -85.0f;  // reachable sweep (h1 side): no stop there, bounded by this alone
 const float A_MAX_DEG = 55.0f;   // a8 side is ALSO bounded by the limit switch / hard stop
                                  // (the runtime guard stops any move that reaches it).
 const float R_HOME_MM = 117.5f;   // PARK pose = cart fully in against the inner stop (= r_min)
