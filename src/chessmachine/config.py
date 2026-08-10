@@ -337,6 +337,10 @@ class GeometryConfig:
     graveyard_center_deg: float = -48.0   # angle to the dish centre. MORE NEGATIVE = further off the
                                           # board's g/h edge. THE tuning knob (~43 steps/deg, so ~400 steps
                                           # ~= 9 deg): nudge if drops catch the board or overshoot the dish.
+                                          # BOUND BY FIRMWARE: the cart angle a slot needs (this, plus the
+                                          # dish scatter and the winch offset) must stay inside
+                                          # A_MIN_DEG in esp32_chess.ino, which SILENTLY CLAMPS rather
+                                          # than erroring -- pieces then pile up short of the dish.
     graveyard_diameter_mm: float = 100.0  # physical dish size (10 cm), bounds the drop scatter
     graveyard_jitter_mm: float = 15.0     # scatter radius for drops, so pieces don't all stack on one point
     graveyard_capacity: int = 30          # max pieces before a capture is refused (a game caps ~30 total)
@@ -385,14 +389,18 @@ class AppConfig:
     auto_reply: bool = True           # auto-make the engine move after opponent's
     confirm_moves: bool = True        # speak each move as it is executed
     require_legal_confirmation: bool = True  # re-ask on illegal/ambiguous moves
-    concurrent_actuation: bool = False  # OFF = sequential/legible: speak the move fully, THEN move
-                                        # the crane (one thing at a time). ON = speak while the crane
-                                        # runs, trading legibility for speed.
+    concurrent_actuation: bool = True   # ON = the crane starts the moment the move is parsed, and the
+                                        # (slow, SLM-generated) commentary is spoken while it travels.
+                                        # OFF = fully sequential: say everything, THEN move -- more
+                                        # legible, but every move waits seconds on the language model
+                                        # before the ESP32 gets a command.
     match_clock: bool = True          # track the human's thinking time (their clock only)
     rehome_after_move: bool = True    # re-home after EVERY finished move to zero open-loop drift
     rehome_on_capture: bool = True    # re-home after a capture (subsumed by rehome_after_move when on)
-    rehome_every_n_moves: int = 0     # re-home every N finished machine moves (0 = off). With the base
-                                      # limit switch, drift is bounded, so periodic homing beats per-move.
+    rehome_every_n_moves: int = 0     # re-home every N finished MACHINE moves, i.e. every N turns
+                                      # (0 = off). Counts only the machine's own moves, not every ply --
+                                      # with auto_reply one utterance actuates two. With the base limit
+                                      # switch, drift is bounded, so periodic homing beats per-move.
     self_critique_only_if_punished: bool = True  # voice own blunder only if opponent punishes it
     two_player: bool = False          # human-vs-human: the machine actuates + comments but makes no moves
                                       # (prompts each player in turn instead of playing a side)

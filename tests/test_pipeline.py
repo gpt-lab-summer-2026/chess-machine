@@ -399,6 +399,40 @@ def test_non_capture_move_does_not_rehome_when_after_move_off():
     assert ("home",) not in m.choreo.ctl.ops
 
 
+def test_rehome_cadence_counts_turns_not_plies():
+    """`rehome_every_n_moves: 3` means every 3 TURNS. With auto_reply a single
+    utterance actuates two plies (the human's, then the machine's), so counting
+    every ply made a cadence of 3 fire after ~1.5 turns instead of 3."""
+    m, _ = make(auto_reply=True, play_as="black")   # machine replies to each move
+    m.cfg.app.rehome_after_move = False
+    m.cfg.app.rehome_on_capture = False            # isolate the cadence
+    m.cfg.app.rehome_every_n_moves = 3
+    m._moves_since_home = 0
+    homes = []
+    for mv in ["e4", "d4", "Nf3"]:                 # 3 human turns == 3 machine replies
+        m.choreo.ctl.ops.clear()
+        m.handle(mv)
+        homes.append(("home",) in m.choreo.ctl.ops)
+    assert homes == [False, False, True], f"homed on turns {homes} (want the 3rd)"
+
+
+def test_rehome_cadence_still_fires_in_two_player_mode():
+    """Two-player mode has no machine moves at all, so there the cadence has to count
+    every actuation or it would never re-home."""
+    m, _ = make(auto_reply=False)
+    m.two_player = True
+    m.cfg.app.rehome_after_move = False
+    m.cfg.app.rehome_on_capture = False
+    m.cfg.app.rehome_every_n_moves = 2
+    m._moves_since_home = 0
+    m.choreo.ctl.ops.clear()
+    m.handle("e4")
+    assert ("home",) not in m.choreo.ctl.ops       # 1 of 2
+    m.choreo.ctl.ops.clear()
+    m.handle("e5")
+    assert ("home",) in m.choreo.ctl.ops          # 2 of 2 -> re-homed
+
+
 def test_rehome_on_capture_can_be_disabled():
     m, _ = make(auto_reply=False)
     m.cfg.app.rehome_after_move = False           # else every move would re-home
@@ -500,24 +534,67 @@ def test_deferred_self_critique_waits_on_machines_own_move():
     assert m._pending_self_critique is not None        # still held, waiting for the human's reply
 
 
-# -- sequential interaction (speak, THEN move) ------------------------------- #
-def test_sequential_actuation_speaks_before_the_crane_moves():
-    """Default flow is one-thing-at-a-time: the machine says the move fully before
-    any head motion, so speech and the crane never overlap."""
+# -- the crane must not wait on the language model --------------------------- #
+def test_crane_starts_before_any_slm_commentary():
+    """THE latency bug: `_move_comment()` (an SLM round trip, seconds on the Pi) used
+    to run BEFORE `_spawn_motion()`, so the ESP32 sat idle waiting on the model even
+    with concurrent_actuation on -- the wait was upstream of the branch that flag
+    controls. Commentary must now see the crane ALREADY moving.
+
+    Deterministic by construction: the fake commentary blocks until the first
+    move_xz lands. Correct order -> the motion thread sets the event and this
+    returns; the old order -> nothing has been spawned yet, so it times out.
+    """
+    import threading as _t
+
     m, _ = make(auto_reply=False)
-    assert m.cfg.app.concurrent_actuation is False        # the hardened default
-    timeline: list[str] = []
-    orig_say, orig_move = m.tts.say, m.choreo.ctl.move_xz
-    m.tts.say = lambda t: (timeline.append("say"), orig_say(t))[1]
-    m.choreo.ctl.move_xz = lambda *a, **k: (timeline.append("move"), orig_move(*a, **k))[1]
-    m.handle("e4")                                        # a plain move: nothing to discard first
-    assert "say" in timeline and "move" in timeline
-    assert timeline.index("say") < timeline.index("move")  # spoke before moving
+    assert m.cfg.app.concurrent_actuation is True          # overlap is the default
+    motion_started = _t.Event()
+    saw_motion_first = {}
+
+    orig_move = m.choreo.ctl.move_xz
+    m.choreo.ctl.move_xz = lambda *a, **k: (motion_started.set(), orig_move(*a, **k))[1]
+
+    def fake_comment(board_before, move, san):
+        saw_motion_first["ok"] = motion_started.wait(timeout=5.0)
+        return ""
+
+    m._move_comment = fake_comment
+    m.handle("e4")
+    assert saw_motion_first.get("ok") is True, \
+        "commentary ran before the crane started -- the SLM is back on the critical path"
+
+
+def test_move_line_is_spoken_as_its_own_segment_before_the_commentary():
+    """The reply is segmented so the instant part lands first: the move announcement
+    is one utterance, the slow coaching a later one -- not one blob that waits for
+    the model before anything is said."""
+    m, tts = make(auto_reply=False)
+    m._move_comment = lambda b, mv, san: "That opens the centre."
+    tts.lines.clear()                                      # drop the startup greeting
+    m.handle("e4")
+    assert len(tts.lines) >= 2
+    assert "pawn to e 4" in tts.lines[0].lower()           # segment 1: the move alone
+    assert tts.lines[0].lower().count("centre") == 0       # commentary is NOT in it
+    assert any("centre" in line.lower() for line in tts.lines[1:])   # segment 2
+
+
+def test_game_over_rides_with_the_move_line():
+    """"Checkmate" belongs with the move that delivered it, not after the coaching,
+    so it must be in the FIRST spoken segment."""
+    m, tts = make(auto_reply=False)
+    for mv in ["e4", "e5", "Bc4", "Nc6", "Qh5", "Nf6"]:
+        m.handle(mv)
+    tts.lines.clear()
+    m.handle("Qxf7")                                       # scholar's mate
+    assert m.game.is_game_over()
+    assert "checkmate" in tts.lines[0].lower()
 
 
 def test_promotion_note_spoken_after_the_piece_is_placed():
     """A promotion with no spare piece asks the human to swap it in; that note must
-    still be spoken (now AFTER the crane places the pawn, not before)."""
+    still be spoken (AFTER the crane places the pawn, not before). Promotions stay
+    strictly sequential for exactly this reason."""
     m, tts = make(auto_reply=False)
     m.game.reset(start_fen="4k3/P7/8/8/8/8/8/4K3 w - - 0 1")   # white pawn on a7
     m.handle("a7 to a8")
@@ -525,9 +602,16 @@ def test_promotion_note_spoken_after_the_piece_is_placed():
     assert any("replace the pawn" in l.lower() for l in tts.lines)
 
 
-def test_concurrent_actuation_still_available_as_opt_in():
+def test_sequential_mode_still_available_as_opt_out():
+    """concurrent_actuation: false = the old fully-sequential flow, everything said
+    before the head moves."""
     m, _ = make(auto_reply=False)
-    m.cfg.app.concurrent_actuation = True
+    m.cfg.app.concurrent_actuation = False
+    timeline: list[str] = []
+    orig_say, orig_move = m.tts.say, m.choreo.ctl.move_xz
+    m.tts.say = lambda t: (timeline.append("say"), orig_say(t))[1]
+    m.choreo.ctl.move_xz = lambda *a, **k: (timeline.append("move"), orig_move(*a, **k))[1]
     m.handle("e4")
-    assert m.game.history[-1][1] == "e4"                  # opt-in path still actuates + applies
-    assert any(op[0] == "move" for op in m.choreo.ctl.ops)
+    assert m.game.history[-1][1] == "e4"
+    assert "say" in timeline and "move" in timeline
+    assert timeline.index("say") < timeline.index("move")   # spoke before moving

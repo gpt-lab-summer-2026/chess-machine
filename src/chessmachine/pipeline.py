@@ -520,12 +520,21 @@ class ChessMachine:
     def _play_move(self, move: chess.Move, prefix: str) -> str:
         """Actuate, narrate, and speak a move — speaking internally.
 
-        SEQUENTIAL by default (app.concurrent_actuation off): the machine says what
-        it is doing and only THEN drives the crane, so speech and motion never
-        overlap and the turn reads as one step at a time. A capture's discard still
-        runs up front — that is where a move can be refused for lack of storage —
-        but for a plain move nothing moves before we speak. Set concurrent_actuation
-        to speak WHILE the crane runs, trading legibility for speed."""
+        The crane starts moving BEFORE any language-model work, and the reply is
+        spoken in two segments:
+
+          1. the move itself ("Okay, pawn to e4.") — pure SAN, no model, instant;
+          2. the coach commentary — an SLM round trip, seconds on this Pi.
+
+        Only segment 1 is on the critical path, so the ESP32 gets its first command
+        as soon as the move is parsed and segment 2 is generated and spoken while
+        the piece is already travelling. This used to be the other way round:
+        `_move_comment()` ran BEFORE `_spawn_motion()`, so every move paid the full
+        model latency before the crane so much as twitched — and setting
+        `concurrent_actuation` could not help, because the wait happened upstream of
+        the branch it controls. Turning that flag OFF now means fully sequential
+        again (speak everything, then move) for when legibility beats speed.
+        """
         board_before = self.game.board.copy()
         # LED off for the whole move: hands off the board until the crane is done.
         self._led("off")
@@ -533,8 +542,8 @@ class ChessMachine:
         # uses it to pick a motor direction; the crane ignores it.
         mover_is_machine = board_before.turn == self.game.machine_color and not self.two_player
         # Clear any captured piece to storage NOW (blocking) and learn whether the
-        # move is even possible, WITHOUT yet moving the piece itself. For a plain
-        # move this touches no motor, so nothing moves before we speak.
+        # move is even possible, WITHOUT yet moving the piece itself. This is the
+        # only thing allowed ahead of the announcement, and it IS crane motion.
         complete, report = self.choreo.begin_move(board_before, move, mover_is_machine)
         if report.aborted:
             # Refused before touching the board (e.g. storage full). Do NOT apply the
@@ -542,34 +551,37 @@ class ChessMachine:
             return self._say(" ".join(report.notes) or "I can't make that move right now.")
 
         san = self.game.push(move)
-        text = f"{prefix} {speak_san(san)}."
-        comment = self._move_comment(board_before, move, san)
-        if comment:
-            text += " " + comment
-        opening = self._opening_comment()
-        if opening:
-            text += " " + opening
-        # If the opponent (this move) just punished a blunder the machine held
-        # back, own it now — otherwise it stays unspoken.
-        critique = self._resolve_self_critique(board_before)
-        if critique:
-            text += " " + critique
+        # Segment 1 — deterministic, so it costs nothing to have it ready first.
+        # Game over rides along: it's just as immediate, and "...checkmate" belongs
+        # with the move that delivered it rather than after the coaching.
+        move_line = f"{prefix} {speak_san(san)}."
         if self.game.is_game_over():
-            text += " " + self.game.result_text()
+            move_line += " " + self.game.result_text()
 
-        # Promotions can add a manual-swap note DURING the crane's travel, so they
-        # never run concurrently; that note is spoken afterwards (below).
-        concurrent = self.cfg.app.concurrent_actuation and move.promotion is None
+        # Promotions can add a manual-swap note DURING the crane's travel and may
+        # need the human to swap a piece, so they stay strictly sequential.
+        overlap = self.cfg.app.concurrent_actuation and move.promotion is None
+        motion: threading.Thread | None = None
+        motion_result: dict | None = None
+        if overlap:
+            motion, motion_result = self._spawn_motion(complete)   # crane starts NOW
+        self._say(move_line)
+
+        # Segment 2 — the slow part, generated while the crane is already moving.
+        # Touches only the engine and the SLM (never the motion controller), so it
+        # is safe alongside the worker thread; `report` is read only after the join.
+        extras = self._narrate_extras(board_before, move, san)
+        if extras:
+            self._say(extras)
+        text = move_line + (" " + extras if extras else "")
+
         finished_ok = True
-        if concurrent:
-            motion, motion_result = self._spawn_motion(complete)
-            self._say(text)             # spoken while the crane is still moving
+        if motion is not None:
             motion.join()               # don't begin the next move until actuation is done
-            finished_ok = motion_result["error"] is None
+            finished_ok = motion_result is not None and motion_result["error"] is None
         else:
-            self._say(text)             # say the move first...
             try:
-                complete()              # ...then run the crane to completion (blocking)
+                complete()              # sequential mode: everything said, now move
             except Exception:  # noqa: BLE001 - reported below, never crashes the turn
                 log.exception("Actuation failed during the move")
                 finished_ok = False
@@ -591,7 +603,14 @@ class ChessMachine:
         # (rehome_after_move); after a capture (rehome_on_capture); or every N finished
         # moves (rehome_every_n_moves).
         if finished_ok:
-            self._moves_since_home += 1
+            # Count the machine's OWN finished moves, which is what the config key
+            # documents ("every N finished machine moves") and what a player means by
+            # "every 3 turns". This used to increment on every ply: with auto_reply a
+            # single utterance actuates two (theirs, then ours), so a cadence of 3
+            # fired after ~1.5 turns. In two-player mode the machine never moves, so
+            # there every actuation counts or the cadence would never fire at all.
+            if mover_is_machine or self.two_player:
+                self._moves_since_home += 1
             due = (self.cfg.app.rehome_after_move
                    or (self.cfg.app.rehome_on_capture and board_before.is_capture(move))
                    or (self.cfg.app.rehome_every_n_moves > 0
@@ -602,6 +621,24 @@ class ChessMachine:
         # opens (_prompt_move_if_new_turn), so there is exactly ONE listening cue and
         # it lands immediately before recording — not here, where it used to double up.
         return text
+
+    def _narrate_extras(self, board_before: chess.Board, move: chess.Move, san: str) -> str:
+        """The optional, SLOW half of a move's narration, as one spoken segment.
+
+        Kept apart from the move announcement precisely because it is slow: each of
+        these can cost an SLM round trip, so it runs while the crane is already
+        carrying the piece rather than delaying it. Order matters (react to the move,
+        then name the opening, then own an earlier blunder) and each call has its own
+        bookkeeping side effects, so they are evaluated in sequence.
+        """
+        parts = [
+            self._move_comment(board_before, move, san),
+            self._opening_comment(),
+            # If the opponent (this move) just punished a blunder the machine held
+            # back, own it now — otherwise it stays unspoken.
+            self._resolve_self_critique(board_before),
+        ]
+        return " ".join(p for p in parts if p)
 
     def _spawn_motion(self, complete) -> tuple[threading.Thread, dict]:
         """Run the rest of a move's actuation on a worker thread.

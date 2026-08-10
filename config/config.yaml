@@ -6,11 +6,14 @@ app:
   play_as: black            # color the MACHINE plays: white | black
   auto_reply: true          # after the opponent's move, immediately make ours
   confirm_moves: true       # speak each move as it is executed
-  concurrent_actuation: false # OFF = one thing at a time: speak the move fully, THEN move the
-                             # crane. Set true to speak while the crane runs (faster, less legible).
+  concurrent_actuation: true # the crane starts as soon as the move is parsed; the move line is
+                             # spoken as it travels and the slow SLM commentary follows while it's
+                             # still moving. false = say everything first, then move (legible, but
+                             # every move waits seconds on the language model before the ESP moves).
   match_clock: true         # track the human's thinking time only (ask "status"/"score")
   rehome_after_move: false   # the base limit switch bounds drift, so don't home every turn
-  rehome_every_n_moves: 3    # instead, re-home every 3 finished machine moves
+  rehome_every_n_moves: 3    # instead, re-home every 3 TURNS (counts the machine's own finished
+                             # moves, not every ply -- one utterance actuates two with auto_reply)
   two_player: false          # human vs human: the machine moves the pieces + comments, makes no moves
   comment_openings: true     # name the opening once or twice as it's recognized
   log_level: INFO
@@ -160,8 +163,14 @@ motion:
     # by the limit switch). Pieces are dumped in and pile up randomly — one-way, so
     # promotion/undo/reset ask you to place those pieces by hand.
     graveyard_center_r_mm: 270.0  # radial distance to the dish centre
-    graveyard_center_deg: -48.0   # angle to the dish centre. THE knob: more negative = further off the
-                                  # board's g/h edge (~43 steps/deg, so ~400 steps = ~9 deg). Tune empirically.
+    graveyard_center_deg: -71.1   # angle to the dish centre. THE knob: more negative = further off the
+                                  # board's g/h edge. 43.284 steps/deg (live CAL ASPD), so this is
+                                  # 1000 steps further out than the old -48.0.
+                                  # REQUIRES firmware A_MIN_DEG <= -78: with the dish scatter and the
+                                  # winch offset the CART is driven to -77.2 deg here, and the firmware
+                                  # SILENTLY CLAMPS past its limit (esp32_chess.ino clampf) -- pieces
+                                  # would pile up short of the dish instead of erroring. Reflash after
+                                  # changing this.
     graveyard_diameter_mm: 100.0  # 10 cm dish
     graveyard_jitter_mm: 15.0     # drop scatter so pieces don't stack on one exact point
     graveyard_capacity: 30

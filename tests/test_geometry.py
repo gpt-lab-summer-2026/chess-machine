@@ -98,3 +98,67 @@ def test_diagonal_board_angle_layout():
     # every square center falls inside the reachable annulus
     for sq in chess.SQUARES:
         assert cfg.r_min_mm <= _r(geo.square_to_point(sq)) <= cfg.r_max_mm
+
+
+# -- the graveyard dish must stay inside the FIRMWARE's soft limits ----------- #
+def _firmware_angle_limits() -> tuple[float, float]:
+    """Read A_MIN_DEG / A_MAX_DEG out of the firmware source.
+
+    Parsed rather than duplicated so this test can't quietly drift away from what
+    the ESP32 is actually built with.
+    """
+    import pathlib
+    import re
+
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "firmware" / "esp32_chess" / "esp32_chess.ino").read_text()
+    amin = float(re.search(r"A_MIN_DEG\s*=\s*(-?[\d.]+)f", src).group(1))
+    amax = float(re.search(r"A_MAX_DEG\s*=\s*(-?[\d.]+)f", src).group(1))
+    return amin, amax
+
+
+def test_configured_graveyard_stays_inside_the_firmware_sweep():
+    """A drop the firmware can't reach is the WORST failure mode here: `clampf` just
+    saturates the angle, so pieces pile up short of the dish with no error at all.
+    The shipped config's dish -- scatter and winch offset included -- must therefore
+    resolve inside the built firmware's sweep, with the real winch_offset applied.
+    """
+    import pathlib
+
+    from chessmachine.config import load_config
+    from chessmachine.motion.serial_esp32 import SerialMotion
+
+    cfg = load_config(pathlib.Path(__file__).resolve().parent.parent
+                      / "config" / "config.yaml")
+    geo = BoardGeometry(cfg.motion.geometry)
+    amin, amax = _firmware_angle_limits()
+    offset = cfg.motion.serial.winch_offset_mm
+
+    for slot in geo.graveyard_slots():
+        r, a = SerialMotion._magnet_to_cart(slot.x, slot.z, offset)
+        assert amin <= a <= amax, (
+            f"graveyard slot needs cart angle {a:.2f} deg, outside the firmware sweep "
+            f"[{amin}, {amax}] -- it would be silently clamped short of the dish"
+        )
+        assert cfg.motion.geometry.r_min_mm <= r <= cfg.motion.geometry.r_max_mm, (
+            f"graveyard slot needs cart radius {r:.2f} mm, outside the reachable annulus"
+        )
+
+
+def test_board_squares_stay_inside_the_firmware_sweep():
+    """Widening A_MIN_DEG for the dish must not be hiding a board-side problem, so
+    pin the board's own angular span too."""
+    import pathlib
+
+    from chessmachine.config import load_config
+    from chessmachine.motion.serial_esp32 import SerialMotion
+
+    cfg = load_config(pathlib.Path(__file__).resolve().parent.parent
+                      / "config" / "config.yaml")
+    geo = BoardGeometry(cfg.motion.geometry)
+    amin, amax = _firmware_angle_limits()
+    offset = cfg.motion.serial.winch_offset_mm
+    for sq in chess.SQUARES:
+        p = geo.square_to_point(sq)
+        _r_cart, a = SerialMotion._magnet_to_cart(p.x, p.z, offset)
+        assert amin <= a <= amax, f"{chess.square_name(sq)} needs {a:.2f} deg"

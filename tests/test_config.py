@@ -11,13 +11,19 @@ def test_defaults():
     assert c.engine.presets["medium"].elo == 1500
 
 
-def test_interaction_is_sequential_and_bounded_by_default():
-    """The hardened turn: no speak/move overlap, a hard 7 s listen cap, and an
+def test_listen_window_is_bounded_and_cued_by_default():
+    """The listen phase stays strictly bounded and legible: a hard 7 s cap and an
     audible mic-open cue."""
     c = Config()
-    assert c.app.concurrent_actuation is False     # speak, THEN move
     assert c.audio.vad.max_utterance_s == 7.0      # listens at most 7 s, then cuts off
     assert c.audio.listen_beep is True             # "speak now" earcon
+
+
+def test_crane_overlaps_the_commentary_by_default():
+    """The crane must not wait on the language model: overlap is on, so actuation
+    starts as soon as the move is parsed and the SLM commentary is spoken while the
+    piece travels. Turn it off only to trade that latency back for legibility."""
+    assert Config().app.concurrent_actuation is True
 
 
 def test_deep_merge(tmp_path):

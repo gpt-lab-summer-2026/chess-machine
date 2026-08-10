@@ -109,7 +109,9 @@ motion:
     # blocked by the base limit switch). Pieces are dumped in and pile up randomly —
     # one-way, so promotion/undo/reset ask you to place those pieces by hand.
     graveyard_center_r_mm: 270.0  # radial distance to the dish centre
-    graveyard_center_deg: -48.0   # angle to the dish centre; more negative = further off the board edge
+    graveyard_center_deg: -71.1   # angle to the dish centre; more negative = further off the board edge.
+                                  # Must stay inside firmware A_MIN_DEG (esp32_chess.ino), which clamps
+                                  # SILENTLY -- this value needs A_MIN_DEG <= -78. Reflash when changing it.
     graveyard_diameter_mm: 100.0  # 10 cm dish
     graveyard_jitter_mm: 15.0     # drop scatter so pieces don't stack on one exact point
     graveyard_capacity: 30
