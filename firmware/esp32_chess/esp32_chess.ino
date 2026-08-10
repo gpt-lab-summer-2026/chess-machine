@@ -20,7 +20,8 @@
  *   PING                          -> OK PONG
  *   HOME                          -> OK HOMED
  *   MOVE R<mm> A<deg> [F<mm/min>] -> OK
- *   GOTO [A<steps>][R<steps>][W<steps>] -> OK  (absolute step-count move; stepmap backend)
+ *   GOTO [A<steps>][R<steps>][W<steps>] -> OK  (absolute step-count move, one axis at a time)
+ *   SYNC [A<steps>][R<steps>][W<steps>] -> OK  (same, but all axes CONCURRENTLY — winch-rise overlap)
  *   PULLEY H<mm> [F<mm/min>]      -> OK
  *   MAG ON|OFF                    -> OK
  *   STATUS                        -> OK R<f> A<f> H<f> MAG<0|1> ENDR<0|1> ENDA<0|1>
@@ -572,6 +573,47 @@ void doMoveRA(float rmm, float adeg) {
   delay(WINCH_SETTLE_MS);  // let the hanging magnet/string stop swinging
 }
 
+// SYNC: drive base/rail/winch to absolute step targets CONCURRENTLY (interleaved, each
+// axis at its own native step rate; the move ends when the slowest axis finishes).
+// Intended for the winch RISE overlapped with a base/rail reposition (all three at once
+// draws ~0.75 A of stepper current — fine on the main supply) — NEVER for a lower, where
+// the head must be positioned first. Unspecified axes hold. Base backlash is compensated
+// up front. The a8/home switch guards are NOT applied, so SYNC is for controlled moves
+// within range (the caller keeps within the board). Base coils release after; winch +
+// rail stay energized to hold the piece / radius.
+void doSync(bool hasA, long aTgt, bool hasR, long rTgt, bool hasW, long wTgt) {
+  long da = hasA ? (aTgt - g_aStepCount) : 0;
+  long dr = hasR ? (rTgt - g_rStepCount) : 0;
+  long dw = hasW ? (wTgt - g_wStepCount) : 0;
+  int aStep = (da >= 0) ? 1 : -1, rStep = (dr >= 0) ? 1 : -1, wStep = (dw >= 0) ? 1 : -1;
+  long aComp = (da != 0 && g_aDir != 0 && aStep != g_aDir) ? A_BACKLASH_STEPS : 0;
+  long aRem = labs(da) + aComp;   // base motor steps: slack take-up up front, then the move
+  long rRem = labs(dr), wRem = labs(dw);
+  const unsigned long A_us = A_STEP_DELAY_MS * 1000UL;
+  const unsigned long R_us = R_STEP_DELAY_US;
+  const unsigned long W_us = WINCH_STEP_DELAY_MS * 1000UL;
+  unsigned long t0 = micros(), aNext = 0, rNext = 0, wNext = 0, i = 0;
+  while (aRem > 0 || rRem > 0 || wRem > 0) {
+    unsigned long el = micros() - t0;
+    if (aRem > 0 && el >= aNext) {
+      g_aStepPhase = (g_aStepPhase + aStep + 8) & 7; baseWritePhase(g_aStepPhase);
+      aRem--; aNext += A_us;
+    }
+    if (rRem > 0 && el >= rNext) {
+      g_rStepPhase = (g_rStepPhase + rStep * R_STEP_DIR + 8) & 7; railWritePhase(g_rStepPhase);
+      rRem--; rNext += R_us;
+    }
+    if (wRem > 0 && el >= wNext) {
+      g_stepPhase = (g_stepPhase + wStep + 8) & 7; winchWritePhase(g_stepPhase);
+      wRem--; wNext += W_us;
+    }
+    if ((++i & 0x3F) == 0) yield();   // feed the RTOS/watchdog through the (long) move
+  }
+  if (hasA) { g_aStepCount = aTgt; g_aDir = aStep; baseRelease(); }  // gearbox holds the angle
+  if (hasR) g_rStepCount = rTgt;
+  if (hasW) g_wStepCount = wTgt;
+}
+
 void doStatus() {
   char buf[80];
   snprintf(buf, sizeof(buf), "R%.2f A%.2f H%.2f MAG%d ENDR%d ENDA%d",
@@ -717,6 +759,16 @@ void handleLine(char* line) {
     if (argKeyed('R', &v)) { if (headMoved) delay(AXIS_STAGGER_MS); railStep((long)v - g_rStepCount); headMoved = true; }
     if (argKeyed('W', &v)) { if (headMoved) delay(AXIS_STAGGER_MS); winchStep((long)v - g_wStepCount, WINCH_STEP_DELAY_MS); }
     if (headMoved) delay(WINCH_SETTLE_MS);  // let the hanging magnet stop swinging before a lower
+    replyOK();
+  } else if (!strcmp(cmd, "SYNC")) {
+    // CONCURRENT absolute move: base/rail/winch driven together (each at its own rate),
+    // for the winch RISE overlapped with a base/rail reposition. NOT for a lower. No
+    // settle here — the caller dwells for swing before the following lower.
+    float v;
+    bool hasA = argKeyed('A', &v); long aTgt = hasA ? (long)v : g_aStepCount;
+    bool hasR = argKeyed('R', &v); long rTgt = hasR ? (long)v : g_rStepCount;
+    bool hasW = argKeyed('W', &v); long wTgt = hasW ? (long)v : g_wStepCount;
+    doSync(hasA, aTgt, hasR, rTgt, hasW, wTgt);
     replyOK();
   } else if (!strcmp(cmd, "JOG")) {
     // Bench calibration, RAW stepper jog: "JOG R<steps>" (rail), "JOG A<steps>"

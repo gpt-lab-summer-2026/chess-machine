@@ -75,6 +75,8 @@ from chessmachine.config import Config, load_config  # noqa: E402
 from chessmachine import factory                     # noqa: E402
 
 FILES = "abcdefgh"
+SWEEP_SETTLE_S = 3.0   # dwell at travel height (after a 3-motor SYNC rise+reposition) so the
+                       # carried piece stops swinging before it's lowered onto the board
 CORNERS = ["a1", "h1", "a8", "h8"]
 KEYS = ("base", "rail", "winch")
 _SQ = re.compile(r"^([a-hA-H])([1-8])$")
@@ -422,7 +424,8 @@ class StepMap:
         dip = int(self.cfg.motion.magnet.pick_dip_steps)
         hover_s = self.cfg.motion.magnet.hover_ms / 1000.0
         print(f"   {label}: {len(seq)} transfers, re-home every {rehome_every} "
-              f"(dip={dip}, hover={hover_s:.1f}s). Ctrl-C to stop.")
+              f"(3-motor rises, {SWEEP_SETTLE_S:g}s travel settle, dip={dip}, hover={hover_s:.1f}s). "
+              "Ctrl-C to stop.")
         done = 0
         try:
             for src, dst in seq:
@@ -437,26 +440,31 @@ class StepMap:
             self.ctl.magnet(False)
             self.ctl.goto_steps(winch=0)
             return
+        self.ctl.goto_steps(winch=0)   # end at travel (the last drop left the winch low)
         print(f"   {label} complete ({done} transfers).")
 
     def _transfer_squares(self, ts: dict, td: dict, dip: int, hover_s: float) -> None:
-        """One pick-and-place between two mapped squares, mirroring the gameplay
-        choreography: magnet ON before the dip and OFF only at the drop; a dip past
-        the pick depth on the PICK, none on the drop."""
-        self.ctl.goto_steps(winch=0)                           # ensure raised before travel
-        self.ctl.goto_steps(base=ts["base"], rail=ts["rail"])  # over the source pawn
+        """One pick-and-place, driving all THREE motors together on the winch RISES: the
+        base/rail reposition overlaps the lift (SYNC), then a settle at travel damps the
+        swing before the lower. Lowers stay sequential — winch only, head already placed —
+        so nothing drags. Magnet ON before the pick, OFF only at the drop."""
+        release = int(self.cfg.motion.magnet.release_above_steps)
+        # PICK: rise the winch to travel WHILE moving over the source (empty head), a brief
+        # dwell, then lower straight down and grab.
+        self.ctl.sync_steps(base=ts["base"], rail=ts["rail"], winch=0)
         self.ctl.magnet(True)                                  # energize (stays on until the drop)
         if hover_s > 0:
-            time.sleep(hover_s)                                # hover a moment over the piece
-        self.ctl.goto_steps(winch=ts["winch"])                 # lower to the calibrated pick depth
+            time.sleep(hover_s)
+        self.ctl.goto_steps(winch=ts["winch"])                 # lower to the pick depth (sequential)
         if dip:
-            self.ctl.goto_steps(winch=ts["winch"] + dip)       # dip past it for sure contact (pick only)
-        self.ctl.goto_steps(winch=0)                           # lift to travel
-        self.ctl.goto_steps(base=td["base"], rail=td["rail"])  # carry to the destination
-        release = int(self.cfg.motion.magnet.release_above_steps)
-        self.ctl.goto_steps(winch=td["winch"] - release)       # release ABOVE the mapped depth (don't press in)
+            self.ctl.goto_steps(winch=ts["winch"] + dip)       # dip for sure contact
+        # CARRY: rise the winch WHILE moving over the destination, holding the piece; then
+        # the travel settle before lowering it onto the board.
+        self.ctl.sync_steps(base=td["base"], rail=td["rail"], winch=0)
+        time.sleep(SWEEP_SETTLE_S)                             # let the carried piece stop swinging
+        self.ctl.goto_steps(winch=td["winch"] - release)       # lower onto the board (release above the depth)
         self.ctl.magnet(False)                                 # release — the only magnet-off
-        self.ctl.goto_steps(winch=0)                           # lift to travel
+        # winch left at the drop height; the next transfer's opening SYNC raises it.
 
 
 def _int(s: str | None) -> int:

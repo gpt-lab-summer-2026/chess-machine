@@ -15,7 +15,8 @@ Implemented by [`firmware/esp32_chess`](../firmware/esp32_chess/) (device) and
 | `PING` | `OK PONG` | liveness check (used on connect) |
 | `HOME` | `OK HOMED` | home all axes: the **base seeks its limit switch** (a8 side, absolute) then returns to the centerline zero; the sensorless winch + cart count back to 0 |
 | `MOVE R<mm> A<deg> [F<mm/min>]` | `OK` | move to radius `R` (mm from the pivot) and angle `A` (deg); `F` optional radial feedrate |
-| `GOTO [A<steps>][R<steps>][W<steps>]` | `OK` | absolute step-count move (stepmap backend): drive each given axis to an absolute half-step count (boot-home = 0, the `STEPS` space) |
+| `GOTO [A<steps>][R<steps>][W<steps>]` | `OK` | absolute step-count move (stepmap backend): drive each given axis to an absolute half-step count (boot-home = 0, the `STEPS` space), one axis at a time |
+| `SYNC [A<steps>][R<steps>][W<steps>]` | `OK` | same absolute targets, but all axes driven **concurrently** (each at its own rate). For a winch RISE overlapped with a base/rail reposition — not a lower. |
 | `PULLEY H<mm> [F<mm/min>]` | `OK` | set magnet height above the board |
 | `MAG ON` / `MAG OFF` | `OK` | energize / release the electromagnet |
 | `STATUS` | `OK R<f> A<f> H<f> MAG<0\|1> ENDR<0\|1> ENDA<0\|1>` | current state; `ENDR` = rail home switch (1 = cart at inner home), `ENDA` = base limit switch (1 = at a8) |

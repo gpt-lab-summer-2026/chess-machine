@@ -115,6 +115,19 @@ class MockMotion(MotionController):
                          int(winch) if winch is not None else None))
         log.debug("mock: goto_steps a=%s r=%s w=%s", base, rail, winch)
 
+    def sync_steps(self, base: int | None = None, rail: int | None = None,
+                   winch: int | None = None) -> None:
+        if base is not None:
+            self._steps["a"] = int(base)
+        if rail is not None:
+            self._steps["r"] = int(rail)
+        if winch is not None:
+            self._steps["w"] = int(winch)
+        self.ops.append(("sync_steps", int(base) if base is not None else None,
+                         int(rail) if rail is not None else None,
+                         int(winch) if winch is not None else None))
+        log.debug("mock: sync_steps a=%s r=%s w=%s", base, rail, winch)
+
     def seek_base_switch(self) -> int:
         """Pretend to seek the base limit switch: return a plausible a8 offset
         (~+32 deg * aspd) and live-enable switch homing, matching the firmware."""

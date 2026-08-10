@@ -192,6 +192,24 @@ class SerialMotion(MotionController):
         # headroom as homing rather than the short per-command timeout.
         self._command("GOTO " + " ".join(parts), timeout=self.cfg.home_timeout_s)
 
+    def sync_steps(self, base: int | None = None, rail: int | None = None,
+                   winch: int | None = None) -> None:
+        """Concurrent absolute move (`SYNC`): base/rail/winch driven together, each at its
+        own rate, finishing when the slowest does. For the winch RISE overlapped with a
+        base/rail reposition — NOT a lower (the head must be positioned first). Blocks."""
+        parts = []
+        if base is not None:
+            parts.append(f"A{int(base)}")
+        if rail is not None:
+            parts.append(f"R{int(rail)}")
+        if winch is not None:
+            parts.append(f"W{int(winch)}")
+        if not parts:
+            return
+        # A concurrent move is bounded by the slowest axis (a full winch rise is slow);
+        # allow the same headroom as homing rather than the short per-command timeout.
+        self._command("SYNC " + " ".join(parts), timeout=self.cfg.home_timeout_s)
+
     def seek_base_switch(self) -> int:
         """Bench-measure the base limit-switch offset (`SEEK`): rotate to the switch
         and read its OUTPUT step count from the trusted zero. HOME the base first so
