@@ -75,8 +75,9 @@ from chessmachine.config import Config, load_config  # noqa: E402
 from chessmachine import factory                     # noqa: E402
 
 FILES = "abcdefgh"
-SWEEP_SETTLE_S = 3.0   # dwell at travel height (after a 3-motor SYNC rise+reposition) so the
-                       # carried piece stops swinging before it's lowered onto the board
+SWEEP_SETTLE_S = 8.0   # dwell at travel height (after a 3-motor SYNC rise+reposition) so the
+                       # head/piece stops swinging before a lower — applied before BOTH the pick
+                       # lower (grab) and the drop lower (place)
 CORNERS = ["a1", "h1", "a8", "h8"]
 KEYS = ("base", "rail", "winch")
 _SQ = re.compile(r"^([a-hA-H])([1-8])$")
@@ -422,15 +423,14 @@ class StepMap:
             print("   no map to sweep — `load <file>` a step map first.")
             return
         dip = int(self.cfg.motion.magnet.pick_dip_steps)
-        hover_s = self.cfg.motion.magnet.hover_ms / 1000.0
         print(f"   {label}: {len(seq)} transfers, re-home every {rehome_every} "
-              f"(3-motor rises, {SWEEP_SETTLE_S:g}s travel settle, dip={dip}, hover={hover_s:.1f}s). "
+              f"(all moves 3-motor SYNC, {SWEEP_SETTLE_S:g}s settle before each lower, dip={dip}). "
               "Ctrl-C to stop.")
         done = 0
         try:
             for src, dst in seq:
                 print(f"   [{done + 1}/{len(seq)}] {src} -> {dst}", flush=True)
-                self._transfer_squares(table[src], table[dst], dip, hover_s)
+                self._transfer_squares(table[src], table[dst], dip)
                 done += 1
                 if done % rehome_every == 0 and done < len(seq):
                     print(f"   re-homing after {done} moves (as gameplay does)...", flush=True)
@@ -438,31 +438,29 @@ class StepMap:
         except KeyboardInterrupt:
             print("\n   interrupted — releasing the magnet and raising the winch.")
             self.ctl.magnet(False)
-            self.ctl.goto_steps(winch=0)
+            self.ctl.sync_steps(winch=0)
             return
-        self.ctl.goto_steps(winch=0)   # end at travel (the last drop left the winch low)
+        self.ctl.sync_steps(winch=0)   # end at travel (the last drop left the winch low)
         print(f"   {label} complete ({done} transfers).")
 
-    def _transfer_squares(self, ts: dict, td: dict, dip: int, hover_s: float) -> None:
-        """One pick-and-place, driving all THREE motors together on the winch RISES: the
-        base/rail reposition overlaps the lift (SYNC), then a settle at travel damps the
-        swing before the lower. Lowers stay sequential — winch only, head already placed —
-        so nothing drags. Magnet ON before the pick, OFF only at the drop."""
+    def _transfer_squares(self, ts: dict, td: dict, dip: int) -> None:
+        """One pick-and-place with the 3-MOTOR protocol throughout — EVERY move is a SYNC.
+        The base/rail reposition overlaps the winch rise, and an 8 s settle at travel damps
+        the swing before EACH lower (grab and place). Magnet ON before the pick, OFF only
+        at the drop."""
         release = int(self.cfg.motion.magnet.release_above_steps)
-        # PICK: rise the winch to travel WHILE moving over the source (empty head), a brief
-        # dwell, then lower straight down and grab.
+        # PICK: rise the winch to travel WHILE moving over the source, energize, settle,
+        # then lower straight down and grab.
         self.ctl.sync_steps(base=ts["base"], rail=ts["rail"], winch=0)
         self.ctl.magnet(True)                                  # energize (stays on until the drop)
-        if hover_s > 0:
-            time.sleep(hover_s)
-        self.ctl.goto_steps(winch=ts["winch"])                 # lower to the pick depth (sequential)
+        time.sleep(SWEEP_SETTLE_S)                             # settle before lowering to pick up
+        self.ctl.sync_steps(winch=ts["winch"])                # lower to the pick depth
         if dip:
-            self.ctl.goto_steps(winch=ts["winch"] + dip)       # dip for sure contact
-        # CARRY: rise the winch WHILE moving over the destination, holding the piece; then
-        # the travel settle before lowering it onto the board.
+            self.ctl.sync_steps(winch=ts["winch"] + dip)      # dip for sure contact
+        # CARRY: rise the winch WHILE moving over the destination (piece held), settle, lower.
         self.ctl.sync_steps(base=td["base"], rail=td["rail"], winch=0)
-        time.sleep(SWEEP_SETTLE_S)                             # let the carried piece stop swinging
-        self.ctl.goto_steps(winch=td["winch"] - release)       # lower onto the board (release above the depth)
+        time.sleep(SWEEP_SETTLE_S)                             # settle before lowering onto the board
+        self.ctl.sync_steps(winch=td["winch"] - release)      # lower onto the board (release above)
         self.ctl.magnet(False)                                 # release — the only magnet-off
         # winch left at the drop height; the next transfer's opening SYNC raises it.
 
