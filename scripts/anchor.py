@@ -51,6 +51,8 @@ Commands:
                   re-homing every n transfers (default 3). Set up pawns on ranks 2 & 7.
   backrank [n]    physical test: move rank 1 -> rank 2, then rank 8 -> rank 7 (in order),
                   re-homing every n transfers (default 3). Set up pieces on ranks 1 & 8.
+  demo            play a hardcoded classic game (Legal's Mate) on the loaded map. Set up
+                  the standard START position first; captures carry pieces off past h1.
   seek            measure the base limit-switch offset -> A_ENDSTOP_STEPS (HOME first)
   mag on|off      electromagnet
   home | pos | save [path] | estop | quit
@@ -78,6 +80,13 @@ FILES = "abcdefgh"
 SWEEP_SETTLE_S = 8.0   # dwell at travel height (after a 3-motor SYNC rise+reposition) so the
                        # head/piece stops swinging before a lower — applied before BOTH the pick
                        # lower (grab) and the drop lower (place)
+
+# `demo` plays this hardcoded classic game on the loaded map. Légal's Mate (Légal vs
+# Saint Brie, 1750) — the archetypal queen-sacrifice miniature: short, famous, ends in
+# checkmate, 3 captures, no castling/promotion. Swap for any legal SAN move list.
+DEMO_GAME_NAME = "Legal's Mate (1750)"
+DEMO_GAME = ["e4", "e5", "Nf3", "d6", "Bc4", "Bg4", "Nc3", "g6",
+             "Nxe5", "Bxd1", "Bxf7+", "Ke7", "Nd5#"]
 CORNERS = ["a1", "h1", "a8", "h8"]
 KEYS = ("base", "rail", "winch")
 _SQ = re.compile(r"^([a-hA-H])([1-8])$")
@@ -434,7 +443,7 @@ class StepMap:
                 done += 1
                 if done % rehome_every == 0 and done < len(seq):
                     print(f"   re-homing after {done} moves (as gameplay does)...", flush=True)
-                    self.ctl.home()
+                    self.home_safely()   # raise the winch before homing so it clears the pieces
         except KeyboardInterrupt:
             print("\n   interrupted — releasing the magnet and raising the winch.")
             self.ctl.magnet(False)
@@ -463,6 +472,67 @@ class StepMap:
         self.ctl.sync_steps(winch=td["winch"] - release)      # lower onto the board (release above)
         self.ctl.magnet(False)                                 # release — the only magnet-off
         # winch left at the drop height; the next transfer's opening SYNC raises it.
+
+    def home_safely(self) -> None:
+        """Raise the winch to travel BEFORE homing, so the base/rail seek doesn't drag the
+        lowered magnet across the other pieces (the firmware's HOME raises the winch only
+        AFTER its base seek)."""
+        self.ctl.goto_steps(winch=0)   # winch UP first
+        self.ctl.home()
+
+    # -- scripted demo game -------------------------------------------------- #
+    def _graveyard_positions(self, table: dict, n: int = 6) -> list[dict]:
+        """Off-board discard slots for captured pieces: a line extending PAST the h1 corner
+        (away from the a8 switch), one 'file' of base rotation apart, at rank-1's rail/winch.
+        Built from the loaded map only."""
+        per_file = table["h1"]["base"] - table["g1"]["base"]     # one file of base at rank 1
+        return [{"base": table["h1"]["base"] + (i + 1) * per_file,
+                 "rail": table["h1"]["rail"], "winch": table["h1"]["winch"]}
+                for i in range(n)]
+
+    def demo(self) -> None:
+        """Play a hardcoded classic game (DEMO_GAME) on the physical board with the loaded
+        map — a scripted showpiece. Captures carry the taken piece off past the h1 edge;
+        castling moves king then rook. SET UP THE STANDARD START POSITION first. Ctrl-C stops."""
+        import chess
+        from chessmachine.chess_engine.game import classify_move
+        table = self.build()
+        if not table:
+            return
+        gy = self._graveyard_positions(table)
+        dip = int(self.cfg.motion.magnet.pick_dip_steps)
+        board = chess.Board()
+        print(f"   demo: {DEMO_GAME_NAME} — {len(DEMO_GAME)} moves on the loaded map "
+              f"({SWEEP_SETTLE_S:g}s settle per lower). Set up the START position, then watch. Ctrl-C to stop.")
+        self.home_safely()
+        gy_i = 0
+        try:
+            for ply, san in enumerate(DEMO_GAME, 1):
+                move = board.parse_san(san)
+                cls = classify_move(board, move)
+                fr, to = chess.square_name(cls.from_square), chess.square_name(cls.to_square)
+                mover = "White" if board.turn == chess.WHITE else "Black"
+                print(f"   [{ply}/{len(DEMO_GAME)}] {mover}: {san}", flush=True)
+                if cls.is_capture and cls.captured_square is not None and gy_i < len(gy):
+                    cap = chess.square_name(cls.captured_square)
+                    print(f"        clears {cap} off the board", flush=True)
+                    self._transfer_squares(table[cap], gy[gy_i], dip)    # captured piece -> graveyard
+                    gy_i += 1
+                if cls.is_castle and cls.rook_from is not None and cls.rook_to is not None:
+                    self._transfer_squares(table[fr], table[to], dip)    # king
+                    self._transfer_squares(table[chess.square_name(cls.rook_from)],
+                                           table[chess.square_name(cls.rook_to)], dip)  # rook
+                else:
+                    self._transfer_squares(table[fr], table[to], dip)
+                board.push(move)
+        except KeyboardInterrupt:
+            print("\n   demo interrupted — releasing the magnet and raising the winch.")
+            self.ctl.magnet(False)
+            self.ctl.sync_steps(winch=0)
+            return
+        self.ctl.sync_steps(winch=0)
+        print(f"   demo complete — {DEMO_GAME_NAME}"
+              + (" (checkmate!)." if board.is_checkmate() else "."))
 
 
 def _int(s: str | None) -> int:
@@ -508,7 +578,7 @@ def main() -> int:
     if args.load:
         m.load(args.load)
     print("Commands: a/r/w <n> | wtop | pos | set <sq> | anchors | del <sq> | load <path> | offset <n> | "
-          "fit model|spline | "
+          "fit model|spline | demo | "
           "map | goto <sq> | pawns [n] | backrank [n] | seek | mag on|off | home | save | quit")
 
     try:
@@ -568,7 +638,9 @@ def main() -> int:
                     on = arg.lower() in ("on", "1", "true")
                     m.ctl.magnet(on); print(f"   magnet {'ON' if on else 'OFF'}")
                 elif c == "home":
-                    m.ctl.home(); print("   homed (step counters zeroed).")
+                    m.home_safely(); print("   winch raised, then homed (step counters zeroed).")
+                elif c == "demo":
+                    m.demo()
                 elif c == "save":
                     m.save(arg)
                 elif c == "estop":
