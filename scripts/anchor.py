@@ -51,8 +51,8 @@ Commands:
                   re-homing every n transfers (default 3). Set up pawns on ranks 2 & 7.
   backrank [n]    physical test: move rank 1 -> rank 2, then rank 8 -> rank 7 (in order),
                   re-homing every n transfers (default 3). Set up pieces on ranks 1 & 8.
-  demo            play a hardcoded classic game (Legal's Mate) on the loaded map. Set up
-                  the standard START position first; captures carry pieces off past h1.
+  demo [n]        play a hardcoded classic game (Legal's Mate) on the loaded map, re-homing
+                  every n moves (default 4). Set up the standard START position first.
   seek            measure the base limit-switch offset -> A_ENDSTOP_STEPS (HOME first)
   mag on|off      electromagnet
   home | pos | save [path] | estop | quit
@@ -511,10 +511,11 @@ class StepMap:
                  "rail": table["h1"]["rail"], "winch": table["h1"]["winch"]}
                 for i in range(n)]
 
-    def demo(self) -> None:
+    def demo(self, rehome_every: int = 4) -> None:
         """Play a hardcoded classic game (DEMO_GAME) on the physical board with the loaded
         map — a scripted showpiece. Captures carry the taken piece off past the h1 edge;
-        castling moves king then rook. SET UP THE STANDARD START POSITION first. Ctrl-C stops."""
+        castling moves king then rook. Re-homes every `rehome_every` moves to zero drift.
+        SET UP THE STANDARD START POSITION first. Ctrl-C stops."""
         import chess
         from chessmachine.chess_engine.game import classify_move
         table = self.build()
@@ -524,7 +525,8 @@ class StepMap:
         dip = int(self.cfg.motion.magnet.pick_dip_steps)
         board = chess.Board()
         print(f"   demo: {DEMO_GAME_NAME} — {len(DEMO_GAME)} moves on the loaded map "
-              f"({SWEEP_SETTLE_S:g}s settle per lower). Set up the START position, then watch. Ctrl-C to stop.")
+              f"(re-home every {rehome_every}, {SWEEP_SETTLE_S:g}s settle per lower). "
+              "Set up the START position, then watch. Ctrl-C to stop.")
         self.home_safely()
         gy_i = 0
         try:
@@ -546,6 +548,9 @@ class StepMap:
                 else:
                     self._transfer_squares(table[fr], table[to], dip)
                 board.push(move)
+                if ply % rehome_every == 0 and ply < len(DEMO_GAME):
+                    print(f"   re-homing after {ply} moves...", flush=True)
+                    self.home_safely()   # raises the winch first, so it clears the pieces
         except KeyboardInterrupt:
             print("\n   demo interrupted — releasing the magnet and raising the winch.")
             self.ctl.magnet(False)
@@ -661,7 +666,7 @@ def main() -> int:
                 elif c == "home":
                     m.home_safely(); print("   winch raised, then homed (step counters zeroed).")
                 elif c == "demo":
-                    m.demo()
+                    m.demo(int(arg) if arg else 4)
                 elif c == "save":
                     m.save(arg)
                 elif c == "estop":
