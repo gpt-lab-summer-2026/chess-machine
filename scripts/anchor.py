@@ -80,6 +80,8 @@ FILES = "abcdefgh"
 SWEEP_SETTLE_S = 8.0   # dwell at travel height (after a 3-motor SYNC rise+reposition) so the
                        # head/piece stops swinging before a lower — applied before BOTH the pick
                        # lower (grab) and the drop lower (place)
+CLEARANCE_STEPS = 3000  # lift the held piece this many winch steps FIRST (winch only) so it clears
+                        # the other pieces BEFORE base/rail travel — no horizontal motion until it's up
 
 # `demo` plays this hardcoded classic game on the loaded map. Légal's Mate (Légal vs
 # Saint Brie, 1750) — the archetypal queen-sacrifice miniature: short, famous, ends in
@@ -185,6 +187,8 @@ class StepMap:
                                              # square by build(); baked into the anchors on save. Corrects a
                                              # steady drift after the crane structure shifts (`offset` cmd).
         self._loaded_path: str | None = None  # last file `load`ed; save() defaults back to it
+        self._winch_pos = 0                  # tracked winch step count (0 = travel/home), so the
+                                             # clearance lift knows how far to raise before travelling
         self.fit_mode = "spline"             # "spline" = thin-plate (exact interpolant) | "model" = stiff
                                              # parametric least-squares fit (motion.predict.BoardModel):
                                              # can't bend to one anchor, so MORE anchors reduce distortion
@@ -433,8 +437,8 @@ class StepMap:
             return
         dip = int(self.cfg.motion.magnet.pick_dip_steps)
         print(f"   {label}: {len(seq)} transfers, re-home every {rehome_every} "
-              f"(all moves 3-motor SYNC, {SWEEP_SETTLE_S:g}s settle before each lower, dip={dip}). "
-              "Ctrl-C to stop.")
+              f"({CLEARANCE_STEPS}-step clearance lift before travel, {SWEEP_SETTLE_S:g}s settle "
+              f"before each lower, dip={dip}). Ctrl-C to stop.")
         done = 0
         try:
             for src, dst in seq:
@@ -447,31 +451,47 @@ class StepMap:
         except KeyboardInterrupt:
             print("\n   interrupted — releasing the magnet and raising the winch.")
             self.ctl.magnet(False)
-            self.ctl.sync_steps(winch=0)
+            self._winch_to(0)
             return
-        self.ctl.sync_steps(winch=0)   # end at travel (the last drop left the winch low)
+        self._winch_to(0)   # end at travel (the last drop left the winch low)
         print(f"   {label} complete ({done} transfers).")
 
+    def _winch_to(self, target: int) -> None:
+        """Move the winch to an absolute step target (SYNC, winch only) and track it."""
+        self.ctl.sync_steps(winch=int(target))
+        self._winch_pos = int(target)
+
+    def _lift_and_travel(self, base: int, rail: int) -> None:
+        """Clear THEN carry: raise the piece CLEARANCE_STEPS off the board FIRST (winch only
+        — this lift is the delay that lets it clear the other pieces), THEN move base/rail
+        to the target while the winch finishes rising to travel. No horizontal motion
+        happens until the piece is up, so it can't shove the other pieces."""
+        clear_to = max(0, self._winch_pos - CLEARANCE_STEPS)
+        if clear_to < self._winch_pos:                         # below travel -> lift clear first
+            self.ctl.goto_steps(winch=clear_to)                # sequential clearance lift (base/rail wait)
+            self._winch_pos = clear_to
+        self.ctl.sync_steps(base=base, rail=rail, winch=0)     # now travel + finish the rise, concurrent
+        self._winch_pos = 0
+
     def _transfer_squares(self, ts: dict, td: dict, dip: int) -> None:
-        """One pick-and-place with the 3-MOTOR protocol throughout — EVERY move is a SYNC.
-        The base/rail reposition overlaps the winch rise, and an 8 s settle at travel damps
-        the swing before EACH lower (grab and place). Magnet ON before the pick, OFF only
-        at the drop."""
+        """One pick-and-place. Every reposition LIFTS THE PIECE CLEAR FIRST (CLEARANCE_STEPS,
+        winch only) and only then travels base/rail — overlapping the rest of the rise — so
+        the carried piece never shoves the others. An 8 s settle at travel damps the swing
+        before each lower (grab and place). Magnet ON before the pick, OFF only at the drop."""
         release = int(self.cfg.motion.magnet.release_above_steps)
-        # PICK: rise the winch to travel WHILE moving over the source, energize, settle,
-        # then lower straight down and grab.
-        self.ctl.sync_steps(base=ts["base"], rail=ts["rail"], winch=0)
+        # PICK: lift clear + travel over the source, energize, settle, lower, grab.
+        self._lift_and_travel(ts["base"], ts["rail"])
         self.ctl.magnet(True)                                  # energize (stays on until the drop)
         time.sleep(SWEEP_SETTLE_S)                             # settle before lowering to pick up
-        self.ctl.sync_steps(winch=ts["winch"])                # lower to the pick depth
+        self._winch_to(ts["winch"])                            # lower to the pick depth
         if dip:
-            self.ctl.sync_steps(winch=ts["winch"] + dip)      # dip for sure contact
-        # CARRY: rise the winch WHILE moving over the destination (piece held), settle, lower.
-        self.ctl.sync_steps(base=td["base"], rail=td["rail"], winch=0)
+            self._winch_to(ts["winch"] + dip)                 # dip for sure contact
+        # CARRY: lift the held piece clear + travel over the destination, settle, lower.
+        self._lift_and_travel(td["base"], td["rail"])
         time.sleep(SWEEP_SETTLE_S)                             # settle before lowering onto the board
-        self.ctl.sync_steps(winch=td["winch"] - release)      # lower onto the board (release above)
+        self._winch_to(td["winch"] - release)                 # lower onto the board (release above)
         self.ctl.magnet(False)                                 # release — the only magnet-off
-        # winch left at the drop height; the next transfer's opening SYNC raises it.
+        # winch left at the drop height; the next transfer's opening lift raises it clear.
 
     def home_safely(self) -> None:
         """Raise the winch to travel BEFORE homing, so the base/rail seek doesn't drag the
@@ -479,6 +499,7 @@ class StepMap:
         AFTER its base seek)."""
         self.ctl.goto_steps(winch=0)   # winch UP first
         self.ctl.home()
+        self._winch_pos = 0            # home zeroes all axes
 
     # -- scripted demo game -------------------------------------------------- #
     def _graveyard_positions(self, table: dict, n: int = 6) -> list[dict]:
@@ -528,9 +549,9 @@ class StepMap:
         except KeyboardInterrupt:
             print("\n   demo interrupted — releasing the magnet and raising the winch.")
             self.ctl.magnet(False)
-            self.ctl.sync_steps(winch=0)
+            self._winch_to(0)
             return
-        self.ctl.sync_steps(winch=0)
+        self._winch_to(0)
         print(f"   demo complete — {DEMO_GAME_NAME}"
               + (" (checkmate!)." if board.is_checkmate() else "."))
 
