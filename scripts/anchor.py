@@ -37,8 +37,10 @@ Commands:
   a <n> / r <n> / w <n>   jog base / rail / winch by N raw steps (signed)
   wtop            raise the winch back to travel (step 0)
   pos             show current step position
-  set <sq>        capture current pose as <sq>'s ground truth
-  anchors         list captured anchors          del <sq>   remove one
+  set <sq>        capture current pose as <sq>'s ground truth (feeds the fit)
+  pin <sq>        pin <sq> to the current pose as a LOCAL override — corrects ONLY that square,
+                  never feeds the fit, so a stray final square is fixed without warping the rest
+  anchors | pins  list the captured anchors / the pinned overrides    del <sq>   remove either
   load <path>     load anchors from a saved map file (to re-fit / add more)
   offset <n>      add n base steps to EVERY square (board-wide rotation drift fix); `offset`
                   alone shows the total, `offset reset` zeroes it. `save` bakes it in.
@@ -183,6 +185,8 @@ class StepMap:
         self.sp = cfg.motion.speeds
         self.ctl = factory.create_motion_controller(cfg.motion)
         self.anchors: dict[str, dict] = {}   # square -> {"base","rail","winch"}
+        self.overrides: dict[str, dict] = {}  # per-square LOCAL corrections applied AFTER the fit, so a
+                                             # slightly-off square is fixed without warping the rest (`pin`)
         self._base_offset = 0                # board-wide base-rotation offset (steps), added to EVERY
                                              # square by build(); baked into the anchors on save. Corrects a
                                              # steady drift after the crane structure shifts (`offset` cmd).
@@ -232,21 +236,40 @@ class StepMap:
         self.anchors[sq.lower()] = {"base": a, "rail": r, "winch": w}
         print(f"   set {sq.lower()}: base={a} rail={r} winch={w}   (ground truth)")
 
+    def pin(self, sq: str) -> None:
+        """Pin <sq> to the CURRENT crane pose as a LOCAL override: build() uses this exact
+        value for <sq> and changes NOTHING else — it does NOT feed the fit, so a slightly-off
+        final square gets corrected without re-warping the rest of the good map. Jog onto the
+        square (winch at the touch depth) first, like `set`."""
+        sq_uv(sq)                       # validate
+        a, r, w = self.steps()
+        self.overrides[sq.lower()] = {"base": a, "rail": r, "winch": w}
+        print(f"   pinned {sq.lower()}: base={a} rail={r} winch={w}   "
+              "(local override — the rest of the map is untouched)")
+
     def build(self) -> dict | None:
         if self.fit_mode == "model":
-            return self._build_model()
-        names = list(self.anchors)
-        fits = _fit(self.anchors, names)
-        if fits is None:
-            print(f"   need >=4 non-collinear anchors to fit a table (have {len(names)})")
+            table = self._build_model()
+        else:
+            names = list(self.anchors)
+            fits = _fit(self.anchors, names)
+            if fits is None:
+                print(f"   need >=4 non-collinear anchors to fit a table (have {len(names)})")
+                return None
+            table = {}
+            for f in range(8):
+                for r in range(8):
+                    u, v = f / 7.0, r / 7.0
+                    entry = {k: round(fits[k](u, v)) for k in KEYS}
+                    entry["base"] += self._base_offset   # board-wide base-rotation correction
+                    table[FILES[f] + str(r + 1)] = entry
+        if table is None:
             return None
-        table: dict[str, dict] = {}
-        for f in range(8):
-            for r in range(8):
-                u, v = f / 7.0, r / 7.0
-                entry = {k: round(fits[k](u, v)) for k in KEYS}
-                entry["base"] += self._base_offset   # board-wide base-rotation correction
-                table[FILES[f] + str(r + 1)] = entry
+        # LOCAL overrides last: replace pinned squares VERBATIM, so they correct only
+        # themselves and never influence the fit of any other square.
+        for sq, v in self.overrides.items():
+            if sq in table:
+                table[sq] = {k: int(v[k]) for k in KEYS}
         return table
 
     def _build_model(self) -> dict | None:
@@ -380,9 +403,12 @@ class StepMap:
             self._base_offset = 0
         table = self.build()
         out = {"anchors": self.anchors, "table": table}
+        if self.overrides:
+            out["overrides"] = self.overrides   # re-applied on load so a refit keeps them
         p = pathlib.Path(path or self._loaded_path or "stepmap.json")
         p.write_text(json.dumps(out, indent=2))
-        print(f"   wrote {p} ({len(self.anchors)} anchors"
+        ov = f", {len(self.overrides)} pinned override(s)" if self.overrides else ""
+        print(f"   wrote {p} ({len(self.anchors)} anchors{ov}"
               + (", refitted 64-square table)" if table else ", no table yet — need >=4 anchors)"))
 
     def load(self, path: str) -> None:
@@ -403,8 +429,17 @@ class StepMap:
             if all(k in v for k in KEYS):
                 loaded[name.lower()] = {k: int(v[k]) for k in KEYS}
         self.anchors = loaded
+        self.overrides = {}
+        for name, v in (data.get("overrides") or {}).items():
+            try:
+                sq_uv(name)
+            except ValueError:
+                continue
+            if all(k in v for k in KEYS):
+                self.overrides[name.lower()] = {k: int(v[k]) for k in KEYS}
         self._loaded_path = path                      # `save` with no arg writes back here
-        print(f"   loaded {len(loaded)} anchors from {path}: {' '.join(sorted(loaded))}")
+        ov = f" + {len(self.overrides)} pinned override(s)" if self.overrides else ""
+        print(f"   loaded {len(loaded)} anchors{ov} from {path}: {' '.join(sorted(loaded))}")
 
     # -- physical test loop -------------------------------------------------- #
     def pawn_sweep(self, rehome_every: int = 3) -> None:
@@ -603,7 +638,8 @@ def main() -> int:
     m.connect()
     if args.load:
         m.load(args.load)
-    print("Commands: a/r/w <n> | wtop | pos | set <sq> | anchors | del <sq> | load <path> | offset <n> | "
+    print("Commands: a/r/w <n> | wtop | pos | set <sq> | pin <sq> | anchors | pins | del <sq> | "
+          "load <path> | offset <n> | "
           "fit model|spline | demo | "
           "map | goto <sq> | pawns [n] | backrank [n] | seek | mag on|off | home | save | quit")
 
@@ -625,13 +661,21 @@ def main() -> int:
                     m.pos()
                 elif c in ("set", "s") and arg:
                     m.capture(arg)
+                elif c == "pin" and arg:
+                    m.pin(arg)
                 elif c == "anchors":
                     for s, v in sorted(m.anchors.items()):
                         print(f"   {s}: base={v['base']} rail={v['rail']} winch={v['winch']}")
                     if not m.anchors:
                         print("   (none)")
+                elif c == "pins":
+                    for s, v in sorted(m.overrides.items()):
+                        print(f"   {s}: base={v['base']} rail={v['rail']} winch={v['winch']}  (override)")
+                    if not m.overrides:
+                        print("   (no pinned overrides)")
                 elif c == "del" and arg:
-                    m.anchors.pop(arg.lower(), None); print(f"   removed {arg.lower()}")
+                    had = m.anchors.pop(arg.lower(), None), m.overrides.pop(arg.lower(), None)
+                    print(f"   removed {arg.lower()}" + (" (anchor + pin)" if all(had) else ""))
                 elif c == "load" and arg:
                     m.load(arg)
                 elif c in ("offset", "rebase"):
