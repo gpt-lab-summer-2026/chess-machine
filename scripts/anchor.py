@@ -84,6 +84,8 @@ SWEEP_SETTLE_S = 8.0   # dwell at travel height (after a 3-motor SYNC rise+repos
                        # lower (grab) and the drop lower (place)
 CLEARANCE_STEPS = 3000  # lift the held piece this many winch steps FIRST (winch only) so it clears
                         # the other pieces BEFORE base/rail travel — no horizontal motion until it's up
+GRAVEYARD_OFFSET_STEPS = -700  # extra base steps pushing the whole discard line FURTHER off past h1
+                               # (negative = away from the board); raise |it| if captures still land on the board
 
 # `demo` plays this hardcoded classic game on the loaded map. Légal's Mate (Légal vs
 # Saint Brie, 1750) — the archetypal queen-sacrifice miniature: short, famous, ends in
@@ -539,10 +541,11 @@ class StepMap:
     # -- scripted demo game -------------------------------------------------- #
     def _graveyard_positions(self, table: dict, n: int = 6) -> list[dict]:
         """Off-board discard slots for captured pieces: a line extending PAST the h1 corner
-        (away from the a8 switch), one 'file' of base rotation apart, at rank-1's rail/winch.
-        Built from the loaded map only."""
+        (away from the a8 switch), one 'file' of base rotation apart, at rank-1's rail/winch,
+        shifted a further GRAVEYARD_OFFSET_STEPS off the board. Built from the loaded map only."""
         per_file = table["h1"]["base"] - table["g1"]["base"]     # one file of base at rank 1
-        return [{"base": table["h1"]["base"] + (i + 1) * per_file,
+        start = table["h1"]["base"] + GRAVEYARD_OFFSET_STEPS     # push the whole line off past h1
+        return [{"base": start + (i + 1) * per_file,
                  "rail": table["h1"]["rail"], "winch": table["h1"]["winch"]}
                 for i in range(n)]
 
